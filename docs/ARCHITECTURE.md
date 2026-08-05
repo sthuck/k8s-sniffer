@@ -361,7 +361,8 @@ Avoid writing custom eBPF C if an existing binary covers OpenSSL/Go.
 
 ## 12. Phased delivery
 
-High-level phases below. **Concrete task IDs, dependencies, and acceptance criteria:** [TASKS.md](./TASKS.md).
+High-level phases below. **Concrete task IDs, dependencies, and acceptance criteria:** [TASKS.md](./TASKS.md).  
+**Testing strategy (unit → kind/k3s e2e per phase):** [TESTING.md](./TESTING.md).
 
 ### Phase 0 — Plan (this document)
 Architecture, TLS options, component boundaries.

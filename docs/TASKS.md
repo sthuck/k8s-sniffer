@@ -1,6 +1,7 @@
 # Task breakdown
 
 Granular work items derived from [ARCHITECTURE.md](./ARCHITECTURE.md).  
+Testing layers, kind/k3s matrix, and per-phase test IDs: [TESTING.md](./TESTING.md).  
 Each task should be independently reviewable; dependencies are listed explicitly.
 
 **Legend**
@@ -63,9 +64,18 @@ Goal: `k8s-sniffer capture -n NS --pod REGEX -o out.pcap` works for multiple pod
 | T1.14 | CLI `capture` command (cobra): flags → in-process Hub → sink | M | T1.8, T1.13 | End-to-end on kind: multi-pod regex capture to file |
 | T1.15 | Agent container image + Makefile/Dockerfile | M | T1.11 | Image builds; includes static tcpdump; documented load into kind |
 | T1.16 | RBAC manifests (ClusterRole/Role for capture SA or docs for user kubeconfig) | S | T1.7 | Documented minimum verbs; example YAML |
-| T1.17 | Kind smoke test script / CI job | M | T1.14, T1.15 | One script: create ns, deploy echo pods, capture, assert pcap non-empty |
+| T1.17 | Kind smoke test script / CI job | M | T1.14, T1.15 | **E2E1.1** green (see TESTING.md); harness under `test/e2e/` |
 
-**Phase 1 exit:** T1.14 + T1.17 green. TLS explicitly out of scope.
+### 1E. Testing infrastructure (Phase 1)
+
+| ID | Task | Size | Depends | Acceptance |
+|----|------|------|---------|------------|
+| T-TEST.1 | E2e harness scaffold (`test/e2e`, kind config, HTTP fixtures) | M | T1.15 | `./test/e2e/run.sh kind` brings cluster, loads image, runs Go e2e package |
+| T-TEST.2 | CI: unit + integration + e2e-kind workflows | M | T-TEST.1, T1.17 | PR checks run `go test ./...` and kind E2E1.1 |
+| T-TEST.3 | envtest setup for Hub agent lifecycle | M | T1.7 | **IT1.1** passes without kind |
+| T-TEST.7 | E2e failure artifacts (pcap, agent logs, cluster dump) | S | T-TEST.2 | Failed CI uploads artifacts |
+
+**Phase 1 exit:** T1.14 + T1.17 + **E2E1.1** (and ideally E2E1.3) green. TLS explicitly out of scope.
 
 ---
 
@@ -81,6 +91,9 @@ Goal: `k8s-sniffer capture -n NS --pod REGEX -o out.pcap` works for multiple pod
 | T2.6 | `--split-per-pod` optional sink mode | S | T1.13 | N files for N pods |
 | T2.7 | Session stats events: packets, bytes, drops, per-pod counters | M | T1.8, T1.12 | CLI prints periodic stats; events on WatchEvents |
 | T2.8 | `--duration` hard stop + graceful drain | S | T1.14 | Session ends cleanly after duration |
+| T-TEST.4 | 2-node kind config + e2e helpers | S | T-TEST.1 | **E2E2.3** can schedule pods on distinct nodes |
+
+**Phase 2 testing exit:** **E2E2.1** + **E2E2.3** + E2E2.5 required in CI (see TESTING.md).
 
 ---
 
@@ -96,9 +109,10 @@ Goal: `k8s-sniffer capture -n NS --pod REGEX -o out.pcap` works for multiple pod
 | T3.6 | Per-pod TLS status events (`active` / `unsupported` / `denied` / `fallback`) | S | T3.3 | CLI shows status; `auto` continues wire capture on failure |
 | T3.7 | Keylog fallback: accept `--keylog-file` and document SSLKEYLOGFILE | M | T3.1 | Wireshark decrypts with provided keylog + wire pcap |
 | T3.8 | Optional: convert TLS events → synthetic PCAP for Wireshark-only users | L | T3.5 | Deferred if JSONL sufficient |
-| T3.9 | Kind TLS e2e: nginx/openssl app + assert plaintext sink non-empty | M | T3.5 | CI job or manual checklist documented |
+| T3.9 | Kind TLS e2e: nginx/openssl app + assert plaintext sink non-empty | M | T3.5, T-TEST.5 | **E2E3.1** green (`e2e_tls` tag) |
+| T-TEST.5 | HTTPS/OpenSSL fixture + `e2e_tls` build tag | M | T-TEST.1 | Fixture emits known plaintext marker for assertions |
 
-**Phase 3 exit:** `auto` works on a supported OpenSSL workload; unsupported stacks degrade gracefully.
+**Phase 3 exit:** `auto` works on a supported OpenSSL workload; **E2E3.1** (or documented CI skip + nightly) + E2E3.3/E2E3.4; unsupported stacks degrade gracefully.
 
 ---
 
@@ -112,6 +126,8 @@ Goal: `k8s-sniffer capture -n NS --pod REGEX -o out.pcap` works for multiple pod
 | T4.4 | Multi-subscriber: two clients SubscribePackets on one session | M | T4.1 | Both receive frames; one disconnect does not stop session |
 | T4.5 | Authn stub (kubeconfig / bearer token) on Hub API | M | T4.1 | Unauthenticated rejected when auth enabled |
 | T4.6 | Session list / get APIs for future UI | S | T4.1 | `ListSessions` returns active sessions |
+
+**Phase 4 testing exit:** **E2E4.1** + E2E4.2 (remote Hub capture + multi-subscriber).
 
 ---
 
@@ -129,15 +145,26 @@ Do not start Phase 5 until Phase 3 is usable and Phase 4 Hub is stable.
 
 ---
 
+## Cross-phase / optional testing
+
+| ID | Task | Phase | Size | Depends | Acceptance |
+|----|------|-------|------|---------|------------|
+| T-TEST.6 | Optional k3s e2e job (nightly/manual) | after 1 | M | T-TEST.1 | **E2E1.1** passes on k3s; socket path documented |
+
+Full matrix and assertion cookbook: [TESTING.md](./TESTING.md).
+
+---
+
 ## Suggested implementation order (first slice)
 
 Execute in this order for the shortest path to a demoable MVP:
 
 ```text
 T0.3 → T1.1 → T1.3 → T1.2
-     → T1.4 → T1.5 → T1.6 → T1.7 → T1.8
+     → T1.4 → T1.5 → T1.6 → T1.7 (+ T-TEST.3) → T1.8
      → T1.9 → T1.10 → T1.11 → T1.12
-     → T1.13 → T1.15 → T1.14 → T1.16 → T1.17
+     → T1.13 → T1.15 → T1.14 → T1.16
+     → T-TEST.1 → T1.17 → T-TEST.2 → T-TEST.7
 ```
 
 Parallelizable after T1.1:
@@ -145,6 +172,7 @@ Parallelizable after T1.1:
 - API protobuf (T1.2) ∥ discovery (T1.4–T1.5)
 - Agent capture (T1.9–T1.11) ∥ Hub scheduling (T1.6–T1.8) once T1.2 exists
 - Image/RBAC (T1.15–T1.16) ∥ CLI sink wiring (T1.13–T1.14)
+- envtest (T-TEST.3) ∥ agent capture work
 
 ---
 
@@ -173,3 +201,7 @@ Parallelizable after T1.1:
 - [ ] T1.15 Agent image
 - [ ] T1.16 RBAC docs/manifests
 - [ ] T1.17 Kind smoke test
+- [ ] T-TEST.1 E2e harness
+- [ ] T-TEST.2 CI workflows
+- [ ] T-TEST.3 envtest Hub lifecycle
+- [ ] T-TEST.7 E2e artifacts
