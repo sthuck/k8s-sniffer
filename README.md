@@ -4,11 +4,21 @@ Lightweight Kubernetes traffic sniffer: match pods by namespace + regex, run nod
 
 ## Status
 
-Planning. See:
+Early Phase 1. The shared API and capture spec exist; discovery, agents and the
+capture pipeline do not yet — the CLI is still a stub.
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — design
-- **[docs/TASKS.md](docs/TASKS.md)** — phased task breakdown
+- **[docs/TASKS.md](docs/TASKS.md)** — phased task breakdown + progress checklist
 - **[docs/TESTING.md](docs/TESTING.md)** — unit / integration / kind+k3s e2e by phase
+- **[specs/](specs/README.md)** — output specs for work that has landed
+
+## Development
+
+```bash
+make build   # ./bin/k8s-sniffer, ./bin/k8s-sniffer-agent
+make test    # go test ./...
+make proto   # regenerate api/sniffer/v1 (needs protoc on PATH)
+```
 
 ## Intended CLI (sketch)
 
