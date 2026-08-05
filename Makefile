@@ -6,6 +6,9 @@ PROTO_ROOT := api
 PROTO_FILES := $(shell find $(PROTO_ROOT) -name '*.proto')
 PROTO_TARGETS := $(patsubst $(PROTO_ROOT)/%,%,$(PROTO_FILES))
 
+# Pin the protoc binary used by proto / proto-check (and CI). Distro packages
+# float; regenerate with this version so stubs stay reproducible.
+PROTOC_VERSION ?= 27.1
 PROTOC_GEN_GO_VERSION ?= v1.34.2
 PROTOC_GEN_GO_GRPC_VERSION ?= v1.5.1
 
@@ -60,7 +63,7 @@ tidy:
 .PHONY: require-protoc
 require-protoc:
 	@command -v protoc >/dev/null || { \
-		echo "protoc not found; install it (apt: protobuf-compiler, brew: protobuf)"; \
+		echo "protoc not found; install v$(PROTOC_VERSION) (CI downloads the official release; brew: protobuf)"; \
 		exit 1; \
 	}
 
