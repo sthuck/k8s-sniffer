@@ -190,7 +190,7 @@ Parallelizable after T1.1:
 - [x] T1.3 CaptureSpec — [specs/S1-skeleton-and-api.md](../specs/S1-skeleton-and-api.md)
 - [x] T1.4 Pod matcher — [specs/S2-pod-matcher.md](../specs/S2-pod-matcher.md)
 - [x] T1.5 Node grouping — [specs/S2-node-grouping.md](../specs/S2-node-grouping.md)
-- [ ] T1.6 Agent manifest
+- [x] T1.6 Agent manifest — [specs/S2-agent-manifest.md](../specs/S2-agent-manifest.md)
 - [ ] T1.7 Agent lifecycle
 - [ ] T1.8 In-process Hub
 - [ ] T1.9 Agent bootstrap
