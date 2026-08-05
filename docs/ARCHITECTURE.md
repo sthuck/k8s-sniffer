@@ -333,11 +333,51 @@ Suggested later UI surfaces (do not implement yet):
 
 ---
 
-## 10. Suggested tech stack
+## 10. Language choice
+
+### Recommendation: **Go** for CLI, Hub, and Agent wrapper
+
+This project is mostly **Kubernetes orchestration + streaming**, not a custom packet/eBPF engine. Capture and TLS decryption are delegated to existing binaries (`tcpdump`, ecapture-class tools). That tilts strongly toward Go.
+
+| Need | Go fit |
+|------|--------|
+| Pod watch / create / delete | `client-go` is the standard; informers, envtest, kind e2e all assume it |
+| Single static CLI + agent binaries | Trivial; small agent images |
+| gRPC streaming sessions | First-class; matches future Hub/UI clients |
+| Subprocess + frame mux | Goroutines/channels are a natural model |
+| Ecosystem precedent | ksniff, Kubeshark, kubectl plugins — same problem space is Go-heavy |
+| kind e2e in CI | Same language as the product; one toolchain |
+
+**When Go is weak:** writing complex custom eBPF uprobes from scratch. We avoid that by shelling out to / embedding existing TLS workers. If we later need deep custom BPF, use `cilium/ebpf` or a small C/Rust BPF program **beside** Go, not instead of it.
+
+### Alternatives considered
+
+| Language | Pros | Cons for *this* project | Verdict |
+|----------|------|-------------------------|---------|
+| **Go** | Best K8s client story, static binaries, gRPC, streaming, precedent | Custom eBPF is awkward (mitigated by reusing tools) | **Choose** |
+| **Rust** | Excellent systems/eBPF (`aya`), safe netns/pcap code, small binaries | `kube-rs` less mature than client-go; slower iteration on Hub/CLI; overkill if capture is subprocesses | Reasonable if prioritizing custom BPF *in-process*; otherwise higher cost than benefit |
+| **Python** | Fast prototyping, solid K8s client | Fat agent images, packaging/shipping pain, weaker long-lived streaming service story | Fine for a spike; poor default for the agent |
+| **TypeScript/Node** | Shared types with a future web UI | Poor fit for privileged netns/CRI/agent; runtime weight | UI only (Phase 5), not Hub/Agent |
+| **C/C++** | Native pcap/eBPF | Painful K8s control plane and gRPC product surface | Capture helpers only, if ever |
+| **Mixed** (Go Hub/CLI + Rust/C agent) | Optimize each layer | Two toolchains, two images, slower MVP | Revisit only if Go agent wrapper becomes a bottleneck |
+
+### What would change the decision?
+
+- **Stay on Go** if we keep “orchestrate existing capture/TLS tools” (current architecture).
+- **Consider Rust (agent only)** if we commit to in-process eBPF TLS and find Go/`cilium/ebpf` insufficient.
+- **Do not pick Python/TS** for the agent path.
+
+### Decision
+
+**Lock Go for Phase 1–4** (CLI, Hub, Agent). Revisit a Rust agent only after Phase 3 proves we need custom BPF beyond vendored tools.
+
+---
+
+## 11. Suggested tech stack
 
 | Layer | Choice | Rationale |
 |-------|--------|-----------|
-| Language | Go | client-go, single static binaries |
+| Language | **Go** | See [§10](#10-language-choice) |
 | CLI | `cobra` / `urfave/cli` | standard |
 | API | gRPC + protobuf | streaming, UI-ready |
 | Wire capture | tcpdump (subprocess) | simple, PCAP-native |
@@ -349,7 +389,7 @@ Avoid writing custom eBPF C if an existing binary covers OpenSSL/Go.
 
 ---
 
-## 11. Security & ops notes
+## 12. Security & ops notes
 
 - Capturing plaintext TLS is sensitive — treat sessions as privileged debug actions; audit log session start/stop.
 - Default to **short-lived** agents; hard timeout (`--duration`) recommended.
