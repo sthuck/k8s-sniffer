@@ -10,3 +10,4 @@ Planning documents live in [`../docs`](../docs): [ARCHITECTURE.md](../docs/ARCHI
 | Spec | Tasks | Summary |
 |------|-------|---------|
 | [S1-skeleton-and-api.md](./S1-skeleton-and-api.md) | T1.1, T1.3, T1.2 (+ T0.3 in code) | Go module & package layout, `capture.Spec` + validation, `sniffer.v1` protobuf/gRPC contract |
+| [S2-pod-matcher.md](./S2-pod-matcher.md) | T1.4 | Pod name regex matcher, Running-only filter, `PodRef` mapping |
