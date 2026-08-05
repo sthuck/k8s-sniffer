@@ -34,6 +34,50 @@ enum TlsStatus {
   TLS_STATUS_FALLBACK = 4;
 }
 
+// Where in the capture pipeline a failure happened.
+enum ErrorStage {
+  ERROR_STAGE_UNSPECIFIED = 0;
+  ERROR_STAGE_DISCOVERY = 1;
+  ERROR_STAGE_AGENT_SCHEDULING = 2;
+  ERROR_STAGE_NETNS_RESOLVE = 3;
+  ERROR_STAGE_CAPTURE_START = 4;
+  ERROR_STAGE_CAPTURE_STREAM = 5;
+  ERROR_STAGE_TLS_ATTACH = 6;
+  ERROR_STAGE_SINK_WRITE = 7;
+  ERROR_STAGE_TEARDOWN = 8;
+}
+
+// Stable, coarse failure category. Clients switch on this; detail is for humans.
+enum ErrorReason {
+  ERROR_REASON_UNSPECIFIED = 0;
+  ERROR_REASON_INVALID_ARGUMENT = 1;
+  ERROR_REASON_NOT_FOUND = 2;
+  ERROR_REASON_PERMISSION_DENIED = 3;
+  ERROR_REASON_UNSUPPORTED = 4;
+  ERROR_REASON_TIMEOUT = 5;
+  ERROR_REASON_RESOURCE_EXHAUSTED = 6;
+  // A vendored tool (tcpdump, TLS worker) exited unexpectedly.
+  ERROR_REASON_TOOL_FAILED = 7;
+  ERROR_REASON_INTERNAL = 8;
+}
+
+// Structured failure, so a UI can group and act on errors instead of parsing
+// prose. Scope fields are set as far as they are known: a discovery failure has
+// neither pod nor node, a netns failure has both.
+message CaptureError {
+  ErrorStage stage = 1;
+  ErrorReason reason = 2;
+  // Human-readable detail, e.g. the tool's stderr tail.
+  string detail = 3;
+  // Whether the hub/agent will retry, or a retry could plausibly succeed.
+  bool retryable = 4;
+  PodRef pod = 5;
+  string node = 6;
+  string agent_pod = 7;
+  // Agent incarnation the failure came from, if any.
+  string stream_id = 8;
+}
+
 message PodAttached {
   PodRef pod = 1;
 }
@@ -90,5 +134,6 @@ message SessionEvent {
     AgentStateChanged agent_state = 13;
     TlsStateChanged tls_state = 14;
     SessionStats stats = 15;
+    CaptureError error = 16;
   }
 }

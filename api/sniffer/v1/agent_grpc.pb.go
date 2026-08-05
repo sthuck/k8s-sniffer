@@ -20,7 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	AgentIngestService_WatchTargets_FullMethodName  = "/sniffer.v1.AgentIngestService/WatchTargets"
-	AgentIngestService_StreamPackets_FullMethodName = "/sniffer.v1.AgentIngestService/StreamPackets"
+	AgentIngestService_StreamCapture_FullMethodName = "/sniffer.v1.AgentIngestService/StreamCapture"
 	AgentIngestService_ReportStatus_FullMethodName  = "/sniffer.v1.AgentIngestService/ReportStatus"
 )
 
@@ -32,7 +32,7 @@ const (
 // credentials and client credentials can diverge (Phase 4 authn).
 type AgentIngestServiceClient interface {
 	WatchTargets(ctx context.Context, in *WatchTargetsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AgentAssignment], error)
-	StreamPackets(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[PacketBatch, StreamPacketsResponse], error)
+	StreamCapture(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CaptureBatch, StreamCaptureSummary], error)
 	ReportStatus(ctx context.Context, in *ReportStatusRequest, opts ...grpc.CallOption) (*ReportStatusResponse, error)
 }
 
@@ -63,18 +63,18 @@ func (c *agentIngestServiceClient) WatchTargets(ctx context.Context, in *WatchTa
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentIngestService_WatchTargetsClient = grpc.ServerStreamingClient[AgentAssignment]
 
-func (c *agentIngestServiceClient) StreamPackets(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[PacketBatch, StreamPacketsResponse], error) {
+func (c *agentIngestServiceClient) StreamCapture(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CaptureBatch, StreamCaptureSummary], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &AgentIngestService_ServiceDesc.Streams[1], AgentIngestService_StreamPackets_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &AgentIngestService_ServiceDesc.Streams[1], AgentIngestService_StreamCapture_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[PacketBatch, StreamPacketsResponse]{ClientStream: stream}
+	x := &grpc.GenericClientStream[CaptureBatch, StreamCaptureSummary]{ClientStream: stream}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type AgentIngestService_StreamPacketsClient = grpc.ClientStreamingClient[PacketBatch, StreamPacketsResponse]
+type AgentIngestService_StreamCaptureClient = grpc.ClientStreamingClient[CaptureBatch, StreamCaptureSummary]
 
 func (c *agentIngestServiceClient) ReportStatus(ctx context.Context, in *ReportStatusRequest, opts ...grpc.CallOption) (*ReportStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -94,7 +94,7 @@ func (c *agentIngestServiceClient) ReportStatus(ctx context.Context, in *ReportS
 // credentials and client credentials can diverge (Phase 4 authn).
 type AgentIngestServiceServer interface {
 	WatchTargets(*WatchTargetsRequest, grpc.ServerStreamingServer[AgentAssignment]) error
-	StreamPackets(grpc.ClientStreamingServer[PacketBatch, StreamPacketsResponse]) error
+	StreamCapture(grpc.ClientStreamingServer[CaptureBatch, StreamCaptureSummary]) error
 	ReportStatus(context.Context, *ReportStatusRequest) (*ReportStatusResponse, error)
 	mustEmbedUnimplementedAgentIngestServiceServer()
 }
@@ -109,8 +109,8 @@ type UnimplementedAgentIngestServiceServer struct{}
 func (UnimplementedAgentIngestServiceServer) WatchTargets(*WatchTargetsRequest, grpc.ServerStreamingServer[AgentAssignment]) error {
 	return status.Errorf(codes.Unimplemented, "method WatchTargets not implemented")
 }
-func (UnimplementedAgentIngestServiceServer) StreamPackets(grpc.ClientStreamingServer[PacketBatch, StreamPacketsResponse]) error {
-	return status.Errorf(codes.Unimplemented, "method StreamPackets not implemented")
+func (UnimplementedAgentIngestServiceServer) StreamCapture(grpc.ClientStreamingServer[CaptureBatch, StreamCaptureSummary]) error {
+	return status.Errorf(codes.Unimplemented, "method StreamCapture not implemented")
 }
 func (UnimplementedAgentIngestServiceServer) ReportStatus(context.Context, *ReportStatusRequest) (*ReportStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReportStatus not implemented")
@@ -147,12 +147,12 @@ func _AgentIngestService_WatchTargets_Handler(srv interface{}, stream grpc.Serve
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentIngestService_WatchTargetsServer = grpc.ServerStreamingServer[AgentAssignment]
 
-func _AgentIngestService_StreamPackets_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(AgentIngestServiceServer).StreamPackets(&grpc.GenericServerStream[PacketBatch, StreamPacketsResponse]{ServerStream: stream})
+func _AgentIngestService_StreamCapture_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(AgentIngestServiceServer).StreamCapture(&grpc.GenericServerStream[CaptureBatch, StreamCaptureSummary]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type AgentIngestService_StreamPacketsServer = grpc.ClientStreamingServer[PacketBatch, StreamPacketsResponse]
+type AgentIngestService_StreamCaptureServer = grpc.ClientStreamingServer[CaptureBatch, StreamCaptureSummary]
 
 func _AgentIngestService_ReportStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReportStatusRequest)
@@ -191,8 +191,8 @@ var AgentIngestService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 		{
-			StreamName:    "StreamPackets",
-			Handler:       _AgentIngestService_StreamPackets_Handler,
+			StreamName:    "StreamCapture",
+			Handler:       _AgentIngestService_StreamCapture_Handler,
 			ClientStreams: true,
 		},
 	},

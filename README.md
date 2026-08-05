@@ -16,9 +16,18 @@ capture pipeline do not yet — the CLI is still a stub.
 
 ```bash
 make build   # ./bin/k8s-sniffer, ./bin/k8s-sniffer-agent
-make test    # go test ./...
+make verify  # proto-check + vet + test (the pre-push gate)
 make proto   # regenerate api/sniffer/v1 (needs protoc on PATH)
 ```
+
+Release builds pin the privileged agent image by digest:
+
+```bash
+make build AGENT_IMAGE=ghcr.io/sthuck/k8s-sniffer-agent@sha256:...
+```
+
+Development builds have no default agent image, so the image must be passed
+explicitly rather than resolving to a mutable tag.
 
 ## Intended CLI (sketch)
 

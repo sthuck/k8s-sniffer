@@ -3,7 +3,7 @@ syntax = "proto3";
 package sniffer.v1;
 
 import "sniffer/v1/event.proto";
-import "sniffer/v1/packet.proto";
+import "sniffer/v1/record.proto";
 import "sniffer/v1/session.proto";
 
 option go_package = "github.com/sthuck/k8s-sniffer/api/sniffer/v1;snifferv1";
@@ -46,8 +46,8 @@ message WatchEventsRequest {
 
 message SubscribePacketsRequest {
   string session_id = 1;
-  // Optional filter: only frames from these sources (empty = all).
-  repeated PacketSource sources = 2;
+  // Optional filter: only these record kinds (empty = all).
+  repeated RecordKind kinds = 2;
 }
 
 // Client-facing API. The CLI talks to an in-process implementation in Phase 1;
@@ -59,5 +59,8 @@ service HubService {
   rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc WatchEvents(WatchEventsRequest) returns (stream SessionEvent);
-  rpc SubscribePackets(SubscribePacketsRequest) returns (stream PacketFrame);
+  // Returns the envelope rather than PacketFrame directly: Phase 3 plaintext
+  // then arrives on this same subscription instead of forcing a breaking
+  // signature change or a parallel API.
+  rpc SubscribePackets(SubscribePacketsRequest) returns (stream CaptureRecord);
 }

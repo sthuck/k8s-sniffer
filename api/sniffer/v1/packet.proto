@@ -17,8 +17,9 @@ message PodRef {
   string container_id = 5;
 }
 
-// Where a payload came from. TLS_PLAINTEXT is reserved for Phase 3 and is
-// never emitted by Phase 1 agents.
+// Where a frame's bytes came from. TLS_PLAINTEXT marks a synthetic frame
+// rendered from decrypted payload (T3.8) and is never emitted by Phase 1
+// agents; structured plaintext uses TlsPlaintextEvent instead.
 enum PacketSource {
   PACKET_SOURCE_UNSPECIFIED = 0;
   PACKET_SOURCE_WIRE = 1;
@@ -44,17 +45,8 @@ message PacketFrame {
   // packet was captured whole.
   uint32 original_length = 5;
   bytes payload = 6;
-  // Per-agent monotonic counter, lets the hub detect gaps without timestamps.
+  // Monotonic counter scoped to the emitting agent incarnation
+  // (CaptureBatch.stream_id), which lets the hub detect gaps without trusting
+  // timestamps. It is not comparable across stream ids.
   uint64 sequence = 7;
-}
-
-// Agents ship batches to amortise gRPC overhead; the hub fans individual
-// frames out to subscribers.
-message PacketBatch {
-  string session_id = 1;
-  string node = 2;
-  repeated PacketFrame frames = 3;
-  // Packets the agent knows it lost (tcpdump/kernel drop counters) since the
-  // previous batch.
-  uint64 dropped = 4;
 }

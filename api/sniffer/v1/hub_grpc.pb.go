@@ -40,7 +40,10 @@ type HubServiceClient interface {
 	GetSession(ctx context.Context, in *GetSessionRequest, opts ...grpc.CallOption) (*GetSessionResponse, error)
 	ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error)
 	WatchEvents(ctx context.Context, in *WatchEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SessionEvent], error)
-	SubscribePackets(ctx context.Context, in *SubscribePacketsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PacketFrame], error)
+	// Returns the envelope rather than PacketFrame directly: Phase 3 plaintext
+	// then arrives on this same subscription instead of forcing a breaking
+	// signature change or a parallel API.
+	SubscribePackets(ctx context.Context, in *SubscribePacketsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CaptureRecord], error)
 }
 
 type hubServiceClient struct {
@@ -110,13 +113,13 @@ func (c *hubServiceClient) WatchEvents(ctx context.Context, in *WatchEventsReque
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HubService_WatchEventsClient = grpc.ServerStreamingClient[SessionEvent]
 
-func (c *hubServiceClient) SubscribePackets(ctx context.Context, in *SubscribePacketsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PacketFrame], error) {
+func (c *hubServiceClient) SubscribePackets(ctx context.Context, in *SubscribePacketsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CaptureRecord], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &HubService_ServiceDesc.Streams[1], HubService_SubscribePackets_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[SubscribePacketsRequest, PacketFrame]{ClientStream: stream}
+	x := &grpc.GenericClientStream[SubscribePacketsRequest, CaptureRecord]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -127,7 +130,7 @@ func (c *hubServiceClient) SubscribePackets(ctx context.Context, in *SubscribePa
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type HubService_SubscribePacketsClient = grpc.ServerStreamingClient[PacketFrame]
+type HubService_SubscribePacketsClient = grpc.ServerStreamingClient[CaptureRecord]
 
 // HubServiceServer is the server API for HubService service.
 // All implementations must embed UnimplementedHubServiceServer
@@ -142,7 +145,10 @@ type HubServiceServer interface {
 	GetSession(context.Context, *GetSessionRequest) (*GetSessionResponse, error)
 	ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error)
 	WatchEvents(*WatchEventsRequest, grpc.ServerStreamingServer[SessionEvent]) error
-	SubscribePackets(*SubscribePacketsRequest, grpc.ServerStreamingServer[PacketFrame]) error
+	// Returns the envelope rather than PacketFrame directly: Phase 3 plaintext
+	// then arrives on this same subscription instead of forcing a breaking
+	// signature change or a parallel API.
+	SubscribePackets(*SubscribePacketsRequest, grpc.ServerStreamingServer[CaptureRecord]) error
 	mustEmbedUnimplementedHubServiceServer()
 }
 
@@ -168,7 +174,7 @@ func (UnimplementedHubServiceServer) ListSessions(context.Context, *ListSessions
 func (UnimplementedHubServiceServer) WatchEvents(*WatchEventsRequest, grpc.ServerStreamingServer[SessionEvent]) error {
 	return status.Errorf(codes.Unimplemented, "method WatchEvents not implemented")
 }
-func (UnimplementedHubServiceServer) SubscribePackets(*SubscribePacketsRequest, grpc.ServerStreamingServer[PacketFrame]) error {
+func (UnimplementedHubServiceServer) SubscribePackets(*SubscribePacketsRequest, grpc.ServerStreamingServer[CaptureRecord]) error {
 	return status.Errorf(codes.Unimplemented, "method SubscribePackets not implemented")
 }
 func (UnimplementedHubServiceServer) mustEmbedUnimplementedHubServiceServer() {}
@@ -280,11 +286,11 @@ func _HubService_SubscribePackets_Handler(srv interface{}, stream grpc.ServerStr
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(HubServiceServer).SubscribePackets(m, &grpc.GenericServerStream[SubscribePacketsRequest, PacketFrame]{ServerStream: stream})
+	return srv.(HubServiceServer).SubscribePackets(m, &grpc.GenericServerStream[SubscribePacketsRequest, CaptureRecord]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type HubService_SubscribePacketsServer = grpc.ServerStreamingServer[PacketFrame]
+type HubService_SubscribePacketsServer = grpc.ServerStreamingServer[CaptureRecord]
 
 // HubService_ServiceDesc is the grpc.ServiceDesc for HubService service.
 // It's only intended for direct use with grpc.RegisterService,

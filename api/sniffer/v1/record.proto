@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package sniffer.v1;
+
+import "google/protobuf/timestamp.proto";
+import "sniffer/v1/packet.proto";
+
+option go_package = "github.com/sthuck/k8s-sniffer/api/sniffer/v1;snifferv1";
+
+enum RecordKind {
+  RECORD_KIND_UNSPECIFIED = 0;
+  RECORD_KIND_WIRE_FRAME = 1;
+  RECORD_KIND_TLS_EVENT = 2;
+}
+
+// Which side of the crypto boundary the plaintext was observed on.
+enum Direction {
+  DIRECTION_UNSPECIFIED = 0;
+  // Application -> network (SSL_write and friends).
+  DIRECTION_OUTBOUND = 1;
+  // Network -> application (SSL_read and friends).
+  DIRECTION_INBOUND = 2;
+}
+
+// Decrypted payload captured by the TLS worker. Reserved for T3.4/T3.5: Phase 1
+// agents never emit it. It carries what a packet frame cannot model -- crypto
+// boundary direction, process and connection identity, which TLS stack was
+// hooked -- which is why plaintext is a distinct record type rather than a
+// synthetic packet.
+message TlsPlaintextEvent {
+  PodRef pod = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  Direction direction = 3;
+  bytes payload = 4;
+  // Groups records belonging to one TLS connection, assigned by the worker.
+  string connection_id = 5;
+  uint32 pid = 6;
+  string process = 7;
+  // TLS stack the uprobe attached to, e.g. "openssl", "gotls".
+  string tls_library = 8;
+  // Monotonic within (stream_id, connection_id).
+  uint64 sequence = 9;
+}
+
+// Envelope for everything a capture session produces. Subscribers switch on the
+// record type, so adding a source (Phase 3 plaintext, and anything after) is
+// additive: no breaking return-type change and no second subscription API with
+// duplicate client plumbing.
+message CaptureRecord {
+  oneof record {
+    PacketFrame wire_frame = 1;
+    TlsPlaintextEvent tls_event = 2;
+  }
+}

@@ -36,12 +36,14 @@ func (stubHub) CreateSession(_ context.Context, req *snifferv1.CreateSessionRequ
 
 func (stubHub) SubscribePackets(req *snifferv1.SubscribePacketsRequest, stream snifferv1.HubService_SubscribePacketsServer) error {
 	for i := range 2 {
-		frame := &snifferv1.PacketFrame{
-			Pod:      &snifferv1.PodRef{Name: "api-0", Namespace: "prod"},
-			Source:   snifferv1.PacketSource_PACKET_SOURCE_WIRE,
-			Sequence: uint64(i),
-		}
-		if err := stream.Send(frame); err != nil {
+		record := &snifferv1.CaptureRecord{Record: &snifferv1.CaptureRecord_WireFrame{
+			WireFrame: &snifferv1.PacketFrame{
+				Pod:      &snifferv1.PodRef{Name: "api-0", Namespace: "prod"},
+				Source:   snifferv1.PacketSource_PACKET_SOURCE_WIRE,
+				Sequence: uint64(i),
+			},
+		}}
+		if err := stream.Send(record); err != nil {
 			return err
 		}
 	}
@@ -85,15 +87,15 @@ func TestHubServiceStubs(t *testing.T) {
 	}
 	var received int
 	for {
-		frame, err := stream.Recv()
+		record, err := stream.Recv()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			t.Fatalf("Recv: %v", err)
 		}
-		if frame.GetPod().GetName() != "api-0" {
-			t.Fatalf("frame pod = %q, want api-0", frame.GetPod().GetName())
+		if got := record.GetWireFrame().GetPod().GetName(); got != "api-0" {
+			t.Fatalf("frame pod = %q, want api-0", got)
 		}
 		received++
 	}

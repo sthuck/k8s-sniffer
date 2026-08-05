@@ -13,59 +13,80 @@ func TestSpecProtoRoundTrip(t *testing.T) {
 		PodPatterns: []string{"payments-.*", "checkout-.*"},
 		BPFFilter:   "tcp port 8080",
 		Duration:    90 * time.Second,
-		Out:         "session.pcapng",
 		Snaplen:     2048,
-		Agent: AgentConfig{
-			Namespace: "k8s-sniffer",
-			Image:     "example.com/agent:v1",
-			CRISocket: DefaultCRISocket,
-		},
+		TLSMode:     TLSModeOff,
 	}
 
 	got := SpecFromProto(spec.ToProto())
 
-	// Out is client-side state and must not survive the round trip.
-	want := spec
-	want.Out = ""
-	if got.Namespace != want.Namespace || got.BPFFilter != want.BPFFilter ||
-		got.Duration != want.Duration || got.Snaplen != want.Snaplen || got.Agent != want.Agent {
-		t.Fatalf("round trip = %+v, want %+v", got, want)
+	if got.Namespace != spec.Namespace || got.BPFFilter != spec.BPFFilter ||
+		got.Duration != spec.Duration || got.Snaplen != spec.Snaplen || got.TLSMode != spec.TLSMode {
+		t.Fatalf("round trip = %+v, want %+v", got, spec)
 	}
-	if len(got.PodPatterns) != len(want.PodPatterns) {
-		t.Fatalf("patterns = %v, want %v", got.PodPatterns, want.PodPatterns)
+	if len(got.PodPatterns) != len(spec.PodPatterns) {
+		t.Fatalf("patterns = %v, want %v", got.PodPatterns, spec.PodPatterns)
 	}
-	for i := range want.PodPatterns {
-		if got.PodPatterns[i] != want.PodPatterns[i] {
-			t.Fatalf("patterns = %v, want %v", got.PodPatterns, want.PodPatterns)
+	for i := range spec.PodPatterns {
+		if got.PodPatterns[i] != spec.PodPatterns[i] {
+			t.Fatalf("patterns = %v, want %v", got.PodPatterns, spec.PodPatterns)
 		}
-	}
-	if got.Out != "" {
-		t.Errorf("Out = %q, want empty after round trip", got.Out)
 	}
 }
 
-func TestToProtoOmitsZeroDurationAndForcesTLSOff(t *testing.T) {
+// The Go and wire enums must stay numerically identical, because conversion is
+// a plain cast in both directions.
+func TestTLSModeMatchesProtoEnum(t *testing.T) {
+	pairs := map[TLSMode]snifferv1.TlsMode{
+		TLSModeUnspecified: snifferv1.TlsMode_TLS_MODE_UNSPECIFIED,
+		TLSModeOff:         snifferv1.TlsMode_TLS_MODE_OFF,
+		TLSModeEBPF:        snifferv1.TlsMode_TLS_MODE_EBPF,
+		TLSModeKeylog:      snifferv1.TlsMode_TLS_MODE_KEYLOG,
+		TLSModeAuto:        snifferv1.TlsMode_TLS_MODE_AUTO,
+	}
+	for mode, want := range pairs {
+		if int32(mode) != int32(want) {
+			t.Errorf("%s = %d, want %d (%s)", mode, int32(mode), int32(want), want)
+		}
+	}
+}
+
+// A requested mode must survive the round trip so the hub can reject or report
+// it, instead of the request looking like a plain unencrypted capture.
+func TestTLSModeIsNotSilentlyDowngraded(t *testing.T) {
+	for _, mode := range []TLSMode{TLSModeOff, TLSModeEBPF, TLSModeKeylog, TLSModeAuto, TLSMode(42)} {
+		pb := Spec{Namespace: "prod", TLSMode: mode}.ToProto()
+		if got := TLSMode(pb.GetTlsMode()); got != mode {
+			t.Errorf("ToProto lost tls mode: got %d, want %d", got, mode)
+		}
+		if got := SpecFromProto(pb).TLSMode; got != mode {
+			t.Errorf("SpecFromProto lost tls mode: got %d, want %d", got, mode)
+		}
+	}
+
+	// An unimplemented mode must fail validation rather than capture encrypted
+	// traffic only.
+	spec := Spec{Namespace: "prod", PodPatterns: []string{"api"}, TLSMode: TLSModeEBPF}
+	if err := spec.WithDefaults().Validate(); err == nil {
+		t.Error("Validate() accepted an unimplemented tls mode")
+	}
+}
+
+func TestToProtoOmitsZeroDuration(t *testing.T) {
 	pb := Spec{Namespace: "prod", PodPatterns: []string{"api"}}.WithDefaults().ToProto()
 
 	if pb.GetDuration() != nil {
 		t.Errorf("Duration = %v, want nil for an open-ended session", pb.GetDuration())
 	}
-	if pb.GetTlsMode() != snifferv1.TlsMode_TLS_MODE_OFF {
-		t.Errorf("TlsMode = %v, want TLS_MODE_OFF in phase 1", pb.GetTlsMode())
-	}
 }
 
-func TestPrivilegedRoundTrip(t *testing.T) {
-	unprivileged := Spec{Agent: AgentConfig{Unprivileged: true}}
-	if got := SpecFromProto(unprivileged.ToProto()); !got.Agent.Unprivileged {
-		t.Error("unprivileged opt-out lost on round trip")
-	}
-	if got := SpecFromProto(Spec{}.ToProto()); got.Agent.Unprivileged {
-		t.Error("default spec became unprivileged on round trip")
-	}
-	// A client that omits the field entirely must still get privileged agents.
-	if got := SpecFromProto(&snifferv1.CaptureSpec{Namespace: "prod"}); !got.Agent.Privileged() {
-		t.Error("absent agent_privileged should mean privileged")
+// Agent deployment settings must not be reachable from a client request.
+func TestCaptureSpecCarriesNoAgentDeploymentSettings(t *testing.T) {
+	fields := (&snifferv1.CaptureSpec{}).ProtoReflect().Descriptor().Fields()
+	for i := range fields.Len() {
+		switch name := string(fields.Get(i).Name()); name {
+		case "agent_namespace", "agent_image", "agent_cri_socket", "agent_privileged":
+			t.Errorf("CaptureSpec exposes trusted agent setting %q to clients", name)
+		}
 	}
 }
 
