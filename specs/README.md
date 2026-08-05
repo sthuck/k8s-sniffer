@@ -5,7 +5,7 @@ records **what was built and how**, at design level — interfaces, decisions,
 deviations from the plan — not line-by-line code.
 
 Planning documents live in [`../docs`](../docs): [ARCHITECTURE.md](../docs/ARCHITECTURE.md),
-[TASKS.md](../docs/TASKS.md), [TESTING.md](../docs/TESTING.md).
+[TASKS.md](../docs/TASKS.md), [TESTING.md](../docs/TESTING.md), [LOGGING.md](../docs/LOGGING.md).
 
 | Spec | Tasks | Summary |
 |------|-------|---------|

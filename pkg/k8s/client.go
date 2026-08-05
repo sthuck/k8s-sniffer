@@ -4,11 +4,16 @@ package k8s
 
 import (
 	"fmt"
+	"log/slog"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/sthuck/k8s-sniffer/pkg/log"
 )
+
+var k8sLog = log.WithComponent("k8s")
 
 // ClientConfig selects which cluster/credentials to use. Zero value means
 // "in-cluster if possible, else the default kubeconfig chain".
@@ -66,6 +71,15 @@ func New(cfg ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build kubernetes client: %w", err)
 	}
+
+	k8sLog.Info("kubernetes client ready",
+		slog.String("default_namespace", namespace),
+	)
+	k8sLog.Debug("kubernetes client config",
+		slog.String("host", restConfig.Host),
+		slog.String("user_agent", restConfig.UserAgent),
+		slog.Bool("explicit_kubeconfig", cfg.Kubeconfig != ""),
+	)
 
 	return &Client{Clientset: clientset, DefaultNamespace: namespace, RestConfig: restConfig}, nil
 }

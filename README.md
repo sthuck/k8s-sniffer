@@ -10,6 +10,7 @@ capture pipeline do not yet — the CLI is still a stub.
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — design
 - **[docs/TASKS.md](docs/TASKS.md)** — phased task breakdown + progress checklist
 - **[docs/TESTING.md](docs/TESTING.md)** — unit / integration / kind+k3s e2e by phase
+- **[docs/LOGGING.md](docs/LOGGING.md)** — slog conventions (info vs debug)
 - **[specs/](specs/README.md)** — output specs for work that has landed
 
 ## Development

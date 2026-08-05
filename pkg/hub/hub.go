@@ -14,7 +14,10 @@ import (
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
 	"github.com/sthuck/k8s-sniffer/pkg/capture"
 	"github.com/sthuck/k8s-sniffer/pkg/hub/agent"
+	"github.com/sthuck/k8s-sniffer/pkg/log"
 )
+
+var hubLog = log.WithComponent("hub")
 
 // Options configures an in-process Hub.
 type Options struct {
@@ -51,11 +54,16 @@ func New(opts Options) (*Hub, error) {
 	if opts.ReadyTimeout > 0 {
 		mgr.WithReadyTimeout(opts.ReadyTimeout)
 	}
-	return &Hub{
+	h := &Hub{
 		opts:     opts,
 		agents:   mgr,
 		sessions: make(map[string]*sessionState),
-	}, nil
+	}
+	hubLog.Debug("hub initialized",
+		"agent_namespace", agentCfg.Namespace,
+		"ready_timeout", mgr.ReadyTimeout(),
+	)
+	return h, nil
 }
 
 func (h *Hub) getSession(id string) (*sessionState, bool) {

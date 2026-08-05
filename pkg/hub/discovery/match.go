@@ -4,6 +4,7 @@ package discovery
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 
 	corev1 "k8s.io/api/core/v1"
@@ -12,7 +13,10 @@ import (
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
 	"github.com/sthuck/k8s-sniffer/pkg/capture"
+	"github.com/sthuck/k8s-sniffer/pkg/log"
 )
+
+var discoveryLog = log.WithComponent("discovery")
 
 // PodMatcher filters pods by RE2 name patterns from a capture spec.
 type PodMatcher struct {
@@ -70,6 +74,11 @@ func ListMatchingPods(ctx context.Context, client kubernetes.Interface, namespac
 		return nil, fmt.Errorf("list pods in namespace %q: %w", namespace, err)
 	}
 
+	discoveryLog.Debug("listed namespace pods",
+		slog.String("namespace", namespace),
+		slog.Int("total", len(list.Items)),
+	)
+
 	matched := make([]corev1.Pod, 0, len(list.Items))
 	for i := range list.Items {
 		pod := list.Items[i]
@@ -81,5 +90,9 @@ func ListMatchingPods(ctx context.Context, client kubernetes.Interface, namespac
 		}
 		matched = append(matched, pod)
 	}
+	discoveryLog.Debug("filtered matching running pods",
+		slog.String("namespace", namespace),
+		slog.Int("matched", len(matched)),
+	)
 	return matched, nil
 }

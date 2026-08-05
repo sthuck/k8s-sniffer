@@ -7,19 +7,34 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
+
+	"github.com/sthuck/k8s-sniffer/pkg/log"
 )
 
 var version = "dev"
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
+	logLevel := flag.String("log-level", "", "log verbosity: info (default) or debug")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println(version)
 		return
 	}
+
+	level, err := log.ResolveLevel(*logLevel, os.Getenv(log.EnvLevel))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid --log-level: %v\n", err)
+		os.Exit(2)
+	}
+	log.Init(log.Config{Level: level})
+
+	cliLog := log.WithComponent("cli")
+	cliLog.Info("k8s-sniffer starting", slog.String("version", version))
+	cliLog.Debug("logging configured", slog.String("level", string(level)))
 
 	fmt.Fprintf(os.Stderr, `k8s-sniffer %s
 
