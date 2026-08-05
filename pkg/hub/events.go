@@ -25,32 +25,27 @@ func (l *eventLog) append(ev *snifferv1.SessionEvent) {
 		ev.Timestamp = timestamppb.Now()
 	}
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.events = append(l.events, ev)
+	subs := make([]chan *snifferv1.SessionEvent, 0, len(l.subs))
 	for _, ch := range l.subs {
-		select {
-		case ch <- ev:
-		default:
-		}
+		subs = append(subs, ch)
+	}
+	l.mu.Unlock()
+	for _, ch := range subs {
+		ch <- ev
 	}
 }
 
-func (l *eventLog) history() []*snifferv1.SessionEvent {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	out := make([]*snifferv1.SessionEvent, len(l.events))
-	copy(out, l.events)
-	return out
-}
-
-func (l *eventLog) subscribe() (int, <-chan *snifferv1.SessionEvent) {
-	ch := make(chan *snifferv1.SessionEvent, 16)
+func (l *eventLog) subscribeWithReplay() (int, <-chan *snifferv1.SessionEvent, []*snifferv1.SessionEvent) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	history := make([]*snifferv1.SessionEvent, len(l.events))
+	copy(history, l.events)
+	ch := make(chan *snifferv1.SessionEvent, 64)
 	id := l.nextID
 	l.nextID++
 	l.subs[id] = ch
-	return id, ch
+	return id, ch, history
 }
 
 func (l *eventLog) unsubscribe(id int) {

@@ -12,6 +12,7 @@ import (
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
 	"github.com/sthuck/k8s-sniffer/pkg/capture"
+	"github.com/sthuck/k8s-sniffer/pkg/hub/agent"
 	"github.com/sthuck/k8s-sniffer/pkg/hub/discovery"
 )
 
@@ -27,29 +28,42 @@ func (h *Hub) CreateSession(ctx context.Context, req *snifferv1.CreateSessionReq
 	wireSpec := spec.ToProto()
 	sess := newSessionState(sessionID, wireSpec)
 	h.putSession(sess)
-	sess.emitState(sessionID, snifferv1.SessionState_SESSION_STATE_PENDING)
 
-	if err := h.startSession(ctx, sess, spec); err != nil {
-		_ = h.agents.DeleteSessionAgents(ctx, sessionID)
-		sess.setState(snifferv1.SessionState_SESSION_STATE_FAILED, err.Error())
-		sess.emitState(sessionID, snifferv1.SessionState_SESSION_STATE_FAILED)
-		sess.emit(&snifferv1.SessionEvent{
-			SessionId: sessionID,
-			Severity:  snifferv1.Severity_SEVERITY_ERROR,
-			Message:   err.Error(),
-			Payload: &snifferv1.SessionEvent_Error{
-				Error: &snifferv1.CaptureError{
-					Stage:  snifferv1.ErrorStage_ERROR_STAGE_AGENT_SCHEDULING,
-					Reason: snifferv1.ErrorReason_ERROR_REASON_INTERNAL,
-					Detail: err.Error(),
-				},
-			},
-		})
-		close(sess.stopCh)
-		return &snifferv1.CreateSessionResponse{Session: sess.snapshot()}, nil
+	sess.lifecycleMu.Lock()
+	sess.emitState(sessionID, snifferv1.SessionState_SESSION_STATE_PENDING)
+	err := h.startSession(ctx, sess, spec)
+	sess.lifecycleMu.Unlock()
+
+	if err != nil {
+		failed := h.failSession(ctx, sess, err)
+		return &snifferv1.CreateSessionResponse{Session: failed}, nil
 	}
 
 	return &snifferv1.CreateSessionResponse{Session: sess.snapshot()}, nil
+}
+
+func (h *Hub) failSession(ctx context.Context, sess *sessionState, err error) *snifferv1.Session {
+	sessionID := sess.proto.Id
+	_ = h.agents.DeleteSessionAgents(ctx, sessionID)
+	sess.setState(snifferv1.SessionState_SESSION_STATE_FAILED, err.Error())
+	sess.emitState(sessionID, snifferv1.SessionState_SESSION_STATE_FAILED)
+	sess.emit(&snifferv1.SessionEvent{
+		SessionId: sessionID,
+		Severity:  snifferv1.Severity_SEVERITY_ERROR,
+		Message:   err.Error(),
+		Payload: &snifferv1.SessionEvent_Error{
+			Error: &snifferv1.CaptureError{
+				Stage:  snifferv1.ErrorStage_ERROR_STAGE_AGENT_SCHEDULING,
+				Reason: snifferv1.ErrorReason_ERROR_REASON_INTERNAL,
+				Detail: err.Error(),
+			},
+		},
+	})
+	snapshot := sess.snapshot()
+	sess.signalStop()
+	sess.events.close()
+	h.deleteSession(sessionID)
+	return snapshot
 }
 
 func (h *Hub) startSession(ctx context.Context, sess *sessionState, spec capture.Spec) error {
@@ -85,8 +99,18 @@ func (h *Hub) startSession(ctx context.Context, sess *sessionState, spec capture
 		})
 	}
 
+	if len(groups) == 0 {
+		return fmt.Errorf("no running pods matched in namespace %q", spec.Namespace)
+	}
+
 	nodes := make([]string, 0, len(groups))
+	createOpts := agent.CreateOptions{ActiveDeadline: spec.Duration}
+
 	for _, group := range groups {
+		if err := sess.context().Err(); err != nil {
+			return fmt.Errorf("session stopped during agent scheduling: %w", err)
+		}
+
 		for _, target := range group.Targets {
 			sess.emit(&snifferv1.SessionEvent{
 				SessionId: sessionID,
@@ -101,7 +125,7 @@ func (h *Hub) startSession(ctx context.Context, sess *sessionState, spec capture
 		streamID := uuid.NewString()
 		assignment := buildAssignment(sessionID, group, spec, streamID)
 
-		pod, err := h.agents.CreateForNode(ctx, sessionID, group.Node)
+		pod, err := h.agents.CreateForNode(sess.context(), sessionID, group.Node, createOpts)
 		if err != nil {
 			return err
 		}
@@ -112,15 +136,15 @@ func (h *Hub) startSession(ctx context.Context, sess *sessionState, spec capture
 			Message:   fmt.Sprintf("scheduling agent %s on node %s", pod.Name, group.Node),
 			Payload: &snifferv1.SessionEvent_AgentState{
 				AgentState: &snifferv1.AgentStateChanged{
-					Node:      group.Node,
-					AgentPod:  pod.Name,
-					Phase:     snifferv1.AgentPhase_AGENT_PHASE_SCHEDULING,
-					Targets:   targetsFromAssignment(assignment),
+					Node:     group.Node,
+					AgentPod: pod.Name,
+					Phase:    snifferv1.AgentPhase_AGENT_PHASE_SCHEDULING,
+					Targets:  targetsFromAssignment(assignment),
 				},
 			},
 		})
 
-		if err := h.agents.WaitReady(ctx, pod); err != nil {
+		if err := h.agents.WaitReady(sess.context(), pod); err != nil {
 			return fmt.Errorf("wait for agent on node %q: %w", group.Node, err)
 		}
 
@@ -179,37 +203,36 @@ func (h *Hub) StopSession(ctx context.Context, req *snifferv1.StopSessionRequest
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionId())
 	}
-	if err := h.stopSession(ctx, sess); err != nil {
+	snapshot, err := h.stopSession(ctx, sess)
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "stop session: %v", err)
 	}
-	return &snifferv1.StopSessionResponse{Session: sess.snapshot()}, nil
+	return &snifferv1.StopSessionResponse{Session: snapshot}, nil
 }
 
-func (h *Hub) stopSession(ctx context.Context, sess *sessionState) error {
+func (h *Hub) stopSession(ctx context.Context, sess *sessionState) (*snifferv1.Session, error) {
+	sess.lifecycleMu.Lock()
+	defer sess.lifecycleMu.Unlock()
+
 	sessionID := sess.proto.Id
-	state := sess.snapshot().GetState()
-	if state == snifferv1.SessionState_SESSION_STATE_STOPPED || state == snifferv1.SessionState_SESSION_STATE_FAILED {
-		return nil
+	if isTerminalState(sess.snapshot().GetState()) {
+		return sess.snapshot(), nil
 	}
 
 	sess.setState(snifferv1.SessionState_SESSION_STATE_STOPPING, "")
 	sess.emitState(sessionID, snifferv1.SessionState_SESSION_STATE_STOPPING)
-
-	select {
-	case <-sess.stopCh:
-	default:
-		close(sess.stopCh)
-	}
+	sess.signalStop()
 
 	if err := h.agents.DeleteSessionAgents(ctx, sessionID); err != nil {
-		return err
+		return nil, err
 	}
 
 	sess.setState(snifferv1.SessionState_SESSION_STATE_STOPPED, "")
 	sess.emitState(sessionID, snifferv1.SessionState_SESSION_STATE_STOPPED)
+	snapshot := sess.snapshot()
 	sess.events.close()
 	h.deleteSession(sessionID)
-	return nil
+	return snapshot, nil
 }
 
 func (h *Hub) GetSession(_ context.Context, req *snifferv1.GetSessionRequest) (*snifferv1.GetSessionResponse, error) {
@@ -235,15 +258,22 @@ func (h *Hub) WatchEvents(req *snifferv1.WatchEventsRequest, stream snifferv1.Hu
 	if !ok {
 		return status.Errorf(codes.NotFound, "session %q not found", req.GetSessionId())
 	}
+
+	var id int
+	var ch <-chan *snifferv1.SessionEvent
+	var history []*snifferv1.SessionEvent
 	if req.GetReplayHistory() {
-		for _, ev := range sess.events.history() {
-			if err := stream.Send(ev); err != nil {
-				return err
-			}
+		id, ch, history = sess.events.subscribeWithReplay()
+	} else {
+		id, ch, _ = sess.events.subscribeWithReplay()
+	}
+	defer sess.events.unsubscribe(id)
+
+	for _, ev := range history {
+		if err := stream.Send(ev); err != nil {
+			return err
 		}
 	}
-	id, ch := sess.events.subscribe()
-	defer sess.events.unsubscribe(id)
 
 	for {
 		select {
@@ -256,7 +286,7 @@ func (h *Hub) WatchEvents(req *snifferv1.WatchEventsRequest, stream snifferv1.Hu
 			}
 		case <-stream.Context().Done():
 			return stream.Context().Err()
-		case <-sess.stopCh:
+		case <-sess.done():
 			return nil
 		}
 	}
@@ -267,11 +297,10 @@ func (h *Hub) SubscribePackets(req *snifferv1.SubscribePacketsRequest, stream sn
 	if !ok {
 		return status.Errorf(codes.NotFound, "session %q not found", req.GetSessionId())
 	}
-	// Packet fan-out from agents lands in T1.12; block until the session ends.
 	select {
 	case <-stream.Context().Done():
 		return stream.Context().Err()
-	case <-sess.stopCh:
+	case <-sess.done():
 		return nil
 	}
 }
@@ -291,7 +320,7 @@ func (h *Hub) WatchTargets(req *snifferv1.WatchTargetsRequest, stream snifferv1.
 	select {
 	case <-stream.Context().Done():
 		return stream.Context().Err()
-	case <-sess.stopCh:
+	case <-sess.done():
 		return nil
 	}
 }
@@ -305,7 +334,6 @@ func (h *Hub) StreamCapture(stream snifferv1.AgentIngestService_StreamCaptureSer
 		if err != nil {
 			return err
 		}
-		// Record fan-out to SubscribePackets subscribers lands in T1.12.
 	}
 }
 
@@ -313,8 +341,6 @@ func (h *Hub) ReportStatus(context.Context, *snifferv1.ReportStatusRequest) (*sn
 	return &snifferv1.ReportStatusResponse{}, nil
 }
 
-// StopAll stops every active session and deletes its agents. Intended for
-// process shutdown (Ctrl-C) before T1.14 wires signal handling.
 func (h *Hub) StopAll(ctx context.Context) error {
 	h.mu.RLock()
 	ids := make([]string, 0, len(h.sessions))
@@ -329,7 +355,7 @@ func (h *Hub) StopAll(ctx context.Context) error {
 		if !ok {
 			continue
 		}
-		if err := h.stopSession(ctx, sess); err != nil && first == nil {
+		if _, err := h.stopSession(ctx, sess); err != nil && first == nil {
 			first = err
 		}
 	}

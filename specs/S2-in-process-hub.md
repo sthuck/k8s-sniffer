@@ -44,7 +44,18 @@ func (h *Hub) StopAll(ctx context.Context) error
 
 `StopAll` stops every active session (for Ctrl-C before T1.14).
 
-## 4. Streaming RPCs (Phase 1 stubs)
+## 4. Session lifecycle
+
+- Per-session `lifecycleMu` serializes `startSession` and `stopSession`.
+- Session context is cancelled on stop so in-flight agent creates observe cancellation.
+- `FAILED` sessions are removed from the store after emitting events.
+- `snapshot()` returns `proto.Clone` of session state.
+
+## 5. Empty discovery
+
+`CreateSession` fails when no schedulable node groups exist (no running matches).
+
+## 6. Notes for T1.9+
 
 | RPC | Phase 1 behaviour |
 |-----|-------------------|

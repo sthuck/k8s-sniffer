@@ -134,7 +134,7 @@ func TestCreateSessionSchedulesAgents(t *testing.T) {
 	}
 
 	agents, err := client.CoreV1().Pods("k8s-sniffer").List(ctx, metav1.ListOptions{
-		LabelSelector: agent.SessionLabelSelector(session.GetId()),
+		LabelSelector: mustSessionSelector(t, session.GetId()),
 	})
 	if err != nil {
 		t.Fatalf("list agents: %v", err)
@@ -171,7 +171,7 @@ func TestStopSessionDeletesAgents(t *testing.T) {
 	}
 
 	remaining, err := client.CoreV1().Pods("k8s-sniffer").List(ctx, metav1.ListOptions{
-		LabelSelector: agent.SessionLabelSelector(sessionID),
+		LabelSelector: mustSessionSelector(t, sessionID),
 	})
 	if err != nil {
 		t.Fatalf("list agents: %v", err)
@@ -259,5 +259,75 @@ func TestWatchTargetsDeliversAssignment(t *testing.T) {
 	}
 	if assignment.GetTargets()[0].GetPod().GetName() != "payments-api" {
 		t.Fatalf("target pod = %q", assignment.GetTargets()[0].GetPod().GetName())
+	}
+}
+
+func mustSessionSelector(t *testing.T, sessionID string) string {
+	t.Helper()
+	selector, err := agent.SessionLabelSelector(sessionID)
+	if err != nil {
+		t.Fatalf("SessionLabelSelector: %v", err)
+	}
+	return selector
+}
+
+func TestCreateSessionFailsWithNoMatches(t *testing.T) {
+	client := newTestKubernetes(testWorkloadPods()...)
+	hubClient, cleanup := startTestHub(t, client)
+	defer cleanup()
+
+	created, err := hubClient.CreateSession(context.Background(), &snifferv1.CreateSessionRequest{
+		Spec: &snifferv1.CaptureSpec{
+			Namespace:   "prod",
+			PodPatterns: []string{"nomatch-.*"},
+			TlsMode:     snifferv1.TlsMode_TLS_MODE_OFF,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession rpc: %v", err)
+	}
+	if created.GetSession().GetState() != snifferv1.SessionState_SESSION_STATE_FAILED {
+		t.Fatalf("state = %s, want FAILED", created.GetSession().GetState())
+	}
+
+	list, err := hubClient.ListSessions(context.Background(), &snifferv1.ListSessionsRequest{})
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(list.GetSessions()) != 0 {
+		t.Fatalf("ListSessions returned %d sessions after FAILED create", len(list.GetSessions()))
+	}
+}
+
+func TestWatchEventsReplayIncludesSessionState(t *testing.T) {
+	client := newTestKubernetes(testWorkloadPods()...)
+	hubClient, cleanup := startTestHub(t, client)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := hubClient.CreateSession(ctx, &snifferv1.CreateSessionRequest{
+		Spec: &snifferv1.CaptureSpec{
+			Namespace:   "prod",
+			PodPatterns: []string{"payments-.*"},
+			TlsMode:     snifferv1.TlsMode_TLS_MODE_OFF,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	stream, err := hubClient.WatchEvents(ctx, &snifferv1.WatchEventsRequest{
+		SessionId:     created.GetSession().GetId(),
+		ReplayHistory: true,
+	})
+	if err != nil {
+		t.Fatalf("WatchEvents: %v", err)
+	}
+	ev, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	if ev.GetSessionState() == nil {
+		t.Fatalf("expected session state event, got %+v", ev.GetPayload())
 	}
 }

@@ -1,9 +1,11 @@
 package hub
 
 import (
+	"context"
 	"sync"
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -15,15 +17,19 @@ type agentRecord struct {
 
 // sessionState is the in-memory hub state for one capture session.
 type sessionState struct {
-	mu      sync.RWMutex
-	proto   *snifferv1.Session
-	events  *eventLog
-	stopCh  chan struct{}
-	agents  map[string]agentRecord
-	assigns map[string]*snifferv1.AgentAssignment
+	mu          sync.RWMutex
+	lifecycleMu sync.Mutex
+	proto       *snifferv1.Session
+	events      *eventLog
+	ctx         context.Context
+	cancel      context.CancelFunc
+	stopOnce    sync.Once
+	agents      map[string]agentRecord
+	assigns     map[string]*snifferv1.AgentAssignment
 }
 
 func newSessionState(id string, spec *snifferv1.CaptureSpec) *sessionState {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &sessionState{
 		proto: &snifferv1.Session{
 			Id:        id,
@@ -32,10 +38,23 @@ func newSessionState(id string, spec *snifferv1.CaptureSpec) *sessionState {
 			CreatedAt: timestamppb.Now(),
 		},
 		events:  newEventLog(),
-		stopCh:  make(chan struct{}),
+		ctx:     ctx,
+		cancel:  cancel,
 		agents:  make(map[string]agentRecord),
 		assigns: make(map[string]*snifferv1.AgentAssignment),
 	}
+}
+
+func (s *sessionState) context() context.Context {
+	return s.ctx
+}
+
+func (s *sessionState) signalStop() {
+	s.stopOnce.Do(s.cancel)
+}
+
+func (s *sessionState) done() <-chan struct{} {
+	return s.ctx.Done()
 }
 
 func (s *sessionState) setState(state snifferv1.SessionState, failureReason string) {
@@ -57,7 +76,7 @@ func (s *sessionState) setNodes(nodes []string) {
 func (s *sessionState) snapshot() *snifferv1.Session {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.proto
+	return proto.Clone(s.proto).(*snifferv1.Session)
 }
 
 func (s *sessionState) emit(ev *snifferv1.SessionEvent) {
@@ -89,5 +108,13 @@ func (s *sessionState) assignmentFor(node string) (*snifferv1.AgentAssignment, b
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	a, ok := s.assigns[node]
-	return a, ok
+	if !ok {
+		return nil, false
+	}
+	return proto.Clone(a).(*snifferv1.AgentAssignment), true
+}
+
+func isTerminalState(state snifferv1.SessionState) bool {
+	return state == snifferv1.SessionState_SESSION_STATE_STOPPED ||
+		state == snifferv1.SessionState_SESSION_STATE_FAILED
 }
