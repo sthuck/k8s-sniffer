@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"log/slog"
+
 	"k8s.io/client-go/kubernetes"
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
@@ -60,8 +62,8 @@ func New(opts Options) (*Hub, error) {
 		sessions: make(map[string]*sessionState),
 	}
 	hubLog.Debug("hub initialized",
-		"agent_namespace", agentCfg.Namespace,
-		"ready_timeout", mgr.ReadyTimeout(),
+		slog.String("agent_namespace", agentCfg.Namespace),
+		slog.Duration("ready_timeout", mgr.ReadyTimeout()),
 	)
 	return h, nil
 }

@@ -63,12 +63,13 @@ func Init(cfg Config) {
 }
 
 // InitFromEnv configures logging from K8S_SNIFFER_LOG_LEVEL (default info).
-func InitFromEnv() {
+func InitFromEnv() error {
 	level, err := ParseLevel(os.Getenv(EnvLevel))
 	if err != nil {
-		level = LevelInfo
+		return err
 	}
 	Init(Config{Level: level})
+	return nil
 }
 
 // ResolveLevel returns flag when non-empty, else env, else info.
@@ -84,9 +85,13 @@ func Default() *slog.Logger {
 	return slog.Default()
 }
 
-// WithComponent returns a child logger tagged for grep-friendly filtering.
+// WithComponent returns a logger tagged for grep-friendly filtering. The logger
+// delegates to slog.Default() at log time, so package-level
+// `var fooLog = log.WithComponent("foo")` is safe before Init() in main.
 func WithComponent(component string) *slog.Logger {
-	return Default().With("component", component)
+	return slog.New(&delegateHandler{
+		attrs: []slog.Attr{slog.String("component", component)},
+	})
 }
 
 func toSlogLevel(level Level) slog.Level {

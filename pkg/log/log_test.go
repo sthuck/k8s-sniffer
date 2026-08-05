@@ -38,7 +38,6 @@ func TestParseLevel(t *testing.T) {
 }
 
 func TestInitSuppressesDebugAtInfo(t *testing.T) {
-	t.Parallel()
 	var buf bytes.Buffer
 	Init(Config{Level: LevelInfo, Writer: &buf})
 	log := WithComponent("test")
@@ -53,12 +52,21 @@ func TestInitSuppressesDebugAtInfo(t *testing.T) {
 }
 
 func TestInitShowsDebugAtDebug(t *testing.T) {
-	t.Parallel()
 	var buf bytes.Buffer
 	Init(Config{Level: LevelDebug, Writer: &buf})
 	WithComponent("test").Debug("detail")
 	if !strings.Contains(buf.String(), "detail") {
 		t.Fatalf("debug log missing: %q", buf.String())
+	}
+}
+
+func TestWithComponentUsesPostInitDefault(t *testing.T) {
+	early := WithComponent("early")
+	var buf bytes.Buffer
+	Init(Config{Level: LevelDebug, Writer: &buf})
+	early.Debug("visible after init")
+	if !strings.Contains(buf.String(), "visible after init") {
+		t.Fatalf("pre-init component logger should delegate to post-Init default: %q", buf.String())
 	}
 }
 
@@ -74,8 +82,14 @@ func TestResolveLevel(t *testing.T) {
 	}
 }
 
+func TestInitFromEnvInvalid(t *testing.T) {
+	t.Setenv(EnvLevel, "trace")
+	if err := InitFromEnv(); err == nil {
+		t.Fatal("InitFromEnv should return error for invalid level")
+	}
+}
+
 func TestWithComponent(t *testing.T) {
-	t.Parallel()
 	var buf bytes.Buffer
 	Init(Config{Level: LevelInfo, Writer: &buf})
 	WithComponent("hub").Info("started")

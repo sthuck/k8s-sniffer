@@ -32,6 +32,12 @@ k8s-sniffer --log-level=debug ...
 k8s-sniffer-agent --log-level=debug ...
 ```
 
+**Agent pods:** the hub does not yet inject log level into agent container env (T1.9 agent bootstrap). Until then, set `K8S_SNIFFER_LOG_LEVEL` on the pod spec manually if you need debug logs from a running agent.
+
+### JSON output
+
+`log.Config.JSON` enables JSON-formatted logs programmatically. There is no env/flag for format yet; text on stderr is the default. JSON env/flag support (`K8S_SNIFFER_LOG_FORMAT`) is deferred until in-cluster e2e needs log scraping (Phase 1 agent path).
+
 ### Programmatic init
 
 Library and test code should call `log.Init` before exercising components that log:
@@ -42,7 +48,7 @@ import "github.com/sthuck/k8s-sniffer/pkg/log"
 log.Init(log.Config{Level: log.LevelDebug}) // optional Writer, JSON
 ```
 
-`log.InitFromEnv()` reads `K8S_SNIFFER_LOG_LEVEL` only (no flag).
+`log.InitFromEnv()` reads `K8S_SNIFFER_LOG_LEVEL` only (no flag) and returns a parse error for invalid values.
 
 ---
 
@@ -60,11 +66,13 @@ Do **not** import `log/slog` only to call `slog.SetDefault` from feature code �
 
 ### Component attribute
 
-Every package that logs should define one package-level logger:
+Every package that logs should define one package-level logger. `WithComponent` delegates to `slog.Default()` at log time, so this is safe before `Init()` in `main`:
 
 ```go
 var hubLog = log.WithComponent("hub")
 ```
+
+Call `log.Init` (or `InitFromEnv`) as early as possible in `main` so the default handler is configured before any work runs.
 
 Use stable, grep-friendly names: `hub`, `agent`, `discovery`, `k8s`, `cli`.
 
@@ -135,11 +143,11 @@ Session **events** (gRPC `WatchEvents`) remain the user-facing audit trail for a
 
 ## Adding logging to new code
 
-1. Add `var fooLog = log.WithComponent("foo")` in the package.
+1. Add `var fooLog = log.WithComponent("foo")` in the package (safe at init; delegates to current default).
 2. **Info** at boundaries: RPC handlers, create/delete complete, state transitions.
 3. **Debug** for Kubernetes calls, matching/filtering, and retry paths.
 4. Return errors; do not log and swallow unless the error is truly ancillary cleanup.
-5. Call `log.Init` (or `InitFromEnv`) in new `main` packages before other work.
+5. Call `log.Init` (or `InitFromEnv`) at the start of `main` before other work.
 6. Extend this doc if you introduce a new component name or a pattern worth documenting.
 
 ---
@@ -159,7 +167,7 @@ level=INFO msg="session running" component=hub session_id=… nodes=2 node_names
 ```text
 level=DEBUG msg="listed namespace pods" component=discovery namespace=prod total=42
 level=DEBUG msg="filtered matching running pods" component=discovery namespace=prod matched=3
-level=DEBUG msg="waiting for agent pod ready" component=agent pod=k8s-sniffer-abc12 namespace=k8s-sniffer timeout=2m0s
+level=DEBUG msg="waiting for agent pod ready" component=agent session_id=… pod=k8s-sniffer-abc12 namespace=k8s-sniffer timeout=2m0s
 ```
 
 ---

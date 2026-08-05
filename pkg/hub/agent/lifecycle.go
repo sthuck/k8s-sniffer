@@ -149,7 +149,7 @@ func (m *Manager) CreateForNode(ctx context.Context, sessionID, nodeName string,
 
 // WaitReady blocks until pod is Running with all containers Ready or ctx/timeout
 // expires.
-func (m *Manager) WaitReady(ctx context.Context, pod *corev1.Pod) error {
+func (m *Manager) WaitReady(ctx context.Context, sessionID string, pod *corev1.Pod) error {
 	if pod == nil {
 		return fmt.Errorf("pod: required")
 	}
@@ -163,6 +163,7 @@ func (m *Manager) WaitReady(ctx context.Context, pod *corev1.Pod) error {
 	defer cancel()
 
 	agentLog.Debug("waiting for agent pod ready",
+		slog.String("session_id", sessionID),
 		slog.String("pod", pod.Name),
 		slog.String("namespace", pod.Namespace),
 		slog.Duration("timeout", timeout),
@@ -206,6 +207,7 @@ func (m *Manager) WaitReady(ctx context.Context, pod *corev1.Pod) error {
 		return err
 	}
 	agentLog.Info("agent pod ready",
+		slog.String("session_id", sessionID),
 		slog.String("pod", pod.Name),
 		slog.String("namespace", pod.Namespace),
 	)

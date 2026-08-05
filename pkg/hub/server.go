@@ -183,7 +183,7 @@ func (h *Hub) startSession(ctx context.Context, sess *sessionState, spec capture
 			},
 		})
 
-		if err := h.agents.WaitReady(sess.context(), pod); err != nil {
+		if err := h.agents.WaitReady(sess.context(), sessionID, pod); err != nil {
 			return fmt.Errorf("wait for agent on node %q: %w", group.Node, err)
 		}
 
@@ -402,15 +402,19 @@ func (h *Hub) StopAll(ctx context.Context) error {
 
 	hubLog.Info("stopping all sessions", slog.Int("count", len(ids)))
 
-	var first error
+	var errs []error
 	for _, id := range ids {
 		sess, ok := h.getSession(id)
 		if !ok {
 			continue
 		}
-		if _, err := h.stopSession(ctx, sess); err != nil && first == nil {
-			first = err
+		if _, err := h.stopSession(ctx, sess); err != nil {
+			hubLog.Info("session stop failed during StopAll",
+				slog.String("session_id", id),
+				slog.String("err", err.Error()),
+			)
+			errs = append(errs, fmt.Errorf("session %q: %w", id, err))
 		}
 	}
-	return first
+	return errors.Join(errs...)
 }

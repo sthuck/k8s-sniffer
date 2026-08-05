@@ -119,7 +119,7 @@ func TestManagerWaitReady(t *testing.T) {
 
 	ready := make(chan error, 1)
 	go func() {
-		ready <- mgr.WaitReady(context.Background(), pod)
+		ready <- mgr.WaitReady(context.Background(), "sess-1", pod)
 	}()
 
 	waitUntil(t, func() bool {
@@ -148,7 +148,7 @@ func TestWaitReadyFailsOnImagePullBackOff(t *testing.T) {
 
 	ready := make(chan error, 1)
 	go func() {
-		ready <- mgr.WaitReady(context.Background(), pod)
+		ready <- mgr.WaitReady(context.Background(), "sess-1", pod)
 	}()
 
 	waitUntil(t, func() bool {
@@ -183,7 +183,7 @@ func TestWaitReadyFailsOnTerminalPhase(t *testing.T) {
 
 	ready := make(chan error, 1)
 	go func() {
-		ready <- mgr.WaitReady(context.Background(), pod)
+		ready <- mgr.WaitReady(context.Background(), "sess-1", pod)
 	}()
 
 	waitUntil(t, func() bool {
