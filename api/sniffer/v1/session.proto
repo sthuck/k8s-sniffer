@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package sniffer.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/sthuck/k8s-sniffer/api/sniffer/v1;snifferv1";
+
+// TLS handling requested for a session. Only TLS_MODE_OFF is implemented before
+// Phase 3; other modes are rejected outright rather than silently downgraded to
+// an encrypted-only capture.
+enum TlsMode {
+  TLS_MODE_UNSPECIFIED = 0;
+  TLS_MODE_OFF = 1;
+  TLS_MODE_EBPF = 2;
+  TLS_MODE_KEYLOG = 3;
+  TLS_MODE_AUTO = 4;
+}
+
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  // Accepted, nothing scheduled yet.
+  SESSION_STATE_PENDING = 1;
+  // Pods discovered, agents being created / becoming ready.
+  SESSION_STATE_STARTING = 2;
+  // At least one agent is streaming.
+  SESSION_STATE_RUNNING = 3;
+  // Draining agents and sinks.
+  SESSION_STATE_STOPPING = 4;
+  SESSION_STATE_STOPPED = 5;
+  SESSION_STATE_FAILED = 6;
+}
+
+// Wire form of the client's capture request: what to capture, never how the
+// capture infrastructure is deployed.
+//
+// Two categories are deliberately absent:
+//
+//  1. Client-side sink configuration (output path, split-per-pod). Sinks belong
+//     to whoever subscribes; a hub must not own a filesystem sink on a client's
+//     behalf.
+//  2. Agent deployment settings (image, CRI socket, privileged, namespace).
+//     Agents run privileged with host and CRI access, so accepting these from a
+//     session request would turn "may start a capture" into "may run
+//     caller-chosen code as root on a node" once the hub is network-accessible
+//     (ARCHITECTURE.md §9). They are trusted hub/operator configuration. If
+//     per-session variation is ever needed, add an operator-defined profile id
+//     that the hub resolves server-side against its own allowlist -- never the
+//     values themselves.
+message CaptureSpec {
+  string namespace = 1;
+  // Unanchored RE2 patterns matched against pod names; a pod matches if any
+  // pattern matches.
+  repeated string pod_patterns = 2;
+  // tcpdump-syntax capture filter applied inside every target netns.
+  string bpf_filter = 3;
+  // Hard stop for the session; zero means "until the client stops it".
+  google.protobuf.Duration duration = 4;
+  // Unset means the hub default (TLS_MODE_OFF until T3.1 lands).
+  TlsMode tls_mode = 5;
+  // Per-packet capture length; zero means the agent default.
+  uint32 snaplen = 6;
+
+  reserved 7, 8, 9, 10;
+  reserved "agent_namespace", "agent_image", "agent_cri_socket", "agent_privileged";
+}
+
+message Session {
+  string id = 1;
+  CaptureSpec spec = 2;
+  SessionState state = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp stopped_at = 5;
+  // Nodes that currently host at least one matched pod (one agent each).
+  repeated string nodes = 6;
+  // Populated when state is SESSION_STATE_FAILED.
+  string failure_reason = 7;
+}

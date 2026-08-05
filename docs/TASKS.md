@@ -181,12 +181,13 @@ Parallelizable after T1.1:
 - One PR ≈ one task ID (or a small tightly coupled pair, e.g. T1.4+T1.5).
 - PR title prefix: `[T1.4] pod name regex matcher`.
 - Update this table’s status in PRs that complete a task (`done` in a checkbox list below as work lands).
+- Each landed slice gets an output spec in [`specs/`](../specs/README.md) describing how it was built.
 
 ### Phase 1 checklist
 
-- [ ] T1.1 Repo layout
-- [ ] T1.2 Protobuf/gRPC stubs
-- [ ] T1.3 CaptureSpec
+- [x] T1.1 Repo layout — [specs/S1-skeleton-and-api.md](../specs/S1-skeleton-and-api.md)
+- [x] T1.2 Protobuf/gRPC stubs — [specs/S1-skeleton-and-api.md](../specs/S1-skeleton-and-api.md)
+- [x] T1.3 CaptureSpec — [specs/S1-skeleton-and-api.md](../specs/S1-skeleton-and-api.md)
 - [ ] T1.4 Pod matcher
 - [ ] T1.5 Node grouping
 - [ ] T1.6 Agent manifest

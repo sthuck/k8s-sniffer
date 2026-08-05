@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package sniffer.v1;
+
+import "google/protobuf/timestamp.proto";
+import "sniffer/v1/packet.proto";
+import "sniffer/v1/session.proto";
+
+option go_package = "github.com/sthuck/k8s-sniffer/api/sniffer/v1;snifferv1";
+
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_INFO = 1;
+  SEVERITY_WARNING = 2;
+  SEVERITY_ERROR = 3;
+}
+
+enum AgentPhase {
+  AGENT_PHASE_UNSPECIFIED = 0;
+  AGENT_PHASE_SCHEDULING = 1;
+  AGENT_PHASE_READY = 2;
+  AGENT_PHASE_CAPTURING = 3;
+  AGENT_PHASE_TERMINATING = 4;
+  AGENT_PHASE_GONE = 5;
+  AGENT_PHASE_FAILED = 6;
+}
+
+// Per-pod TLS outcome, reported by the agent's TLS worker in Phase 3.
+enum TlsStatus {
+  TLS_STATUS_UNSPECIFIED = 0;
+  TLS_STATUS_ACTIVE = 1;
+  TLS_STATUS_UNSUPPORTED = 2;
+  TLS_STATUS_DENIED = 3;
+  TLS_STATUS_FALLBACK = 4;
+}
+
+// Where in the capture pipeline a failure happened.
+enum ErrorStage {
+  ERROR_STAGE_UNSPECIFIED = 0;
+  ERROR_STAGE_DISCOVERY = 1;
+  ERROR_STAGE_AGENT_SCHEDULING = 2;
+  ERROR_STAGE_NETNS_RESOLVE = 3;
+  ERROR_STAGE_CAPTURE_START = 4;
+  ERROR_STAGE_CAPTURE_STREAM = 5;
+  ERROR_STAGE_TLS_ATTACH = 6;
+  ERROR_STAGE_SINK_WRITE = 7;
+  ERROR_STAGE_TEARDOWN = 8;
+}
+
+// Stable, coarse failure category. Clients switch on this; detail is for humans.
+enum ErrorReason {
+  ERROR_REASON_UNSPECIFIED = 0;
+  ERROR_REASON_INVALID_ARGUMENT = 1;
+  ERROR_REASON_NOT_FOUND = 2;
+  ERROR_REASON_PERMISSION_DENIED = 3;
+  ERROR_REASON_UNSUPPORTED = 4;
+  ERROR_REASON_TIMEOUT = 5;
+  ERROR_REASON_RESOURCE_EXHAUSTED = 6;
+  // A vendored tool (tcpdump, TLS worker) exited unexpectedly.
+  ERROR_REASON_TOOL_FAILED = 7;
+  ERROR_REASON_INTERNAL = 8;
+}
+
+// Structured failure, so a UI can group and act on errors instead of parsing
+// prose. Scope fields are set as far as they are known: a discovery failure has
+// neither pod nor node, a netns failure has both.
+message CaptureError {
+  ErrorStage stage = 1;
+  ErrorReason reason = 2;
+  // Human-readable detail, e.g. the tool's stderr tail.
+  string detail = 3;
+  // Whether the hub/agent will retry, or a retry could plausibly succeed.
+  bool retryable = 4;
+  PodRef pod = 5;
+  string node = 6;
+  string agent_pod = 7;
+  // Agent incarnation the failure came from, if any.
+  string stream_id = 8;
+}
+
+message PodAttached {
+  PodRef pod = 1;
+}
+
+message PodDetached {
+  PodRef pod = 1;
+  string reason = 2;
+}
+
+message AgentStateChanged {
+  string node = 1;
+  string agent_pod = 2;
+  AgentPhase phase = 3;
+  repeated PodRef targets = 4;
+}
+
+message TlsStateChanged {
+  PodRef pod = 1;
+  TlsStatus status = 2;
+  string detail = 3;
+}
+
+message SessionStateChanged {
+  SessionState state = 1;
+}
+
+message PodCounters {
+  PodRef pod = 1;
+  uint64 packets = 2;
+  uint64 bytes = 3;
+  uint64 dropped = 4;
+}
+
+message SessionStats {
+  uint64 packets = 1;
+  uint64 bytes = 2;
+  uint64 dropped = 3;
+  repeated PodCounters per_pod = 4;
+}
+
+// Everything the CLI prints (and a future UI renders) arrives as a structured
+// event rather than agent stdout.
+message SessionEvent {
+  string session_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  Severity severity = 3;
+  // Human-readable one-liner; payload carries the machine-readable detail.
+  string message = 4;
+
+  oneof payload {
+    SessionStateChanged session_state = 10;
+    PodAttached pod_attached = 11;
+    PodDetached pod_detached = 12;
+    AgentStateChanged agent_state = 13;
+    TlsStateChanged tls_state = 14;
+    SessionStats stats = 15;
+    CaptureError error = 16;
+  }
+}

@@ -4,11 +4,30 @@ Lightweight Kubernetes traffic sniffer: match pods by namespace + regex, run nod
 
 ## Status
 
-Planning. See:
+Early Phase 1. The shared API and capture spec exist; discovery, agents and the
+capture pipeline do not yet — the CLI is still a stub.
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — design
-- **[docs/TASKS.md](docs/TASKS.md)** — phased task breakdown
+- **[docs/TASKS.md](docs/TASKS.md)** — phased task breakdown + progress checklist
 - **[docs/TESTING.md](docs/TESTING.md)** — unit / integration / kind+k3s e2e by phase
+- **[specs/](specs/README.md)** — output specs for work that has landed
+
+## Development
+
+```bash
+make build   # ./bin/k8s-sniffer, ./bin/k8s-sniffer-agent
+make verify  # proto-check + vet + test (the pre-push gate)
+make proto   # regenerate api/sniffer/v1 (needs protoc on PATH)
+```
+
+Release builds pin the privileged agent image by digest:
+
+```bash
+make build AGENT_IMAGE=ghcr.io/sthuck/k8s-sniffer-agent@sha256:...
+```
+
+Development builds have no default agent image, so the image must be passed
+explicitly rather than resolving to a mutable tag.
 
 ## Intended CLI (sketch)
 

@@ -1,0 +1,4 @@
+/bin/
+*.pcap
+*.pcapng
+*.jsonl

@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package sniffer.v1;
+
+import "sniffer/v1/event.proto";
+import "sniffer/v1/record.proto";
+import "sniffer/v1/session.proto";
+
+option go_package = "github.com/sthuck/k8s-sniffer/api/sniffer/v1;snifferv1";
+
+message CreateSessionRequest {
+  CaptureSpec spec = 1;
+}
+
+message CreateSessionResponse {
+  Session session = 1;
+}
+
+message StopSessionRequest {
+  string session_id = 1;
+}
+
+message StopSessionResponse {
+  Session session = 1;
+}
+
+message GetSessionRequest {
+  string session_id = 1;
+}
+
+message GetSessionResponse {
+  Session session = 1;
+}
+
+message ListSessionsRequest {}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+}
+
+message WatchEventsRequest {
+  string session_id = 1;
+  // Replay buffered events emitted before this call before switching to live.
+  bool replay_history = 2;
+}
+
+message SubscribePacketsRequest {
+  string session_id = 1;
+  // Optional filter: only these record kinds (empty = all).
+  repeated RecordKind kinds = 2;
+}
+
+// Client-facing API. The CLI talks to an in-process implementation in Phase 1;
+// the same service is served over the network once the hub is extracted
+// (Phase 4), so no client code changes when that happens.
+service HubService {
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  rpc StopSession(StopSessionRequest) returns (StopSessionResponse);
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc WatchEvents(WatchEventsRequest) returns (stream SessionEvent);
+  // Returns the envelope rather than PacketFrame directly: Phase 3 plaintext
+  // then arrives on this same subscription instead of forcing a breaking
+  // signature change or a parallel API.
+  rpc SubscribePackets(SubscribePacketsRequest) returns (stream CaptureRecord);
+}

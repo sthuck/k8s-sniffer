@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package sniffer.v1;
+
+import "sniffer/v1/event.proto";
+import "sniffer/v1/packet.proto";
+import "sniffer/v1/record.proto";
+import "sniffer/v1/session.proto";
+
+option go_package = "github.com/sthuck/k8s-sniffer/api/sniffer/v1;snifferv1";
+
+// One netns capture the agent must run.
+message Target {
+  PodRef pod = 1;
+  // Interfaces inside the target netns; empty means "any".
+  repeated string interfaces = 2;
+  string bpf_filter = 3;
+  TlsMode tls_mode = 4;
+  uint32 snaplen = 5;
+}
+
+// The agent's whole world view. Passed at bootstrap (protojson via argument or
+// env) and later refreshed over WatchTargets so pods appearing mid-session do
+// not require respawning the agent pod.
+message AgentAssignment {
+  string session_id = 1;
+  string node = 2;
+  // Opaque id the hub mints per agent incarnation. Agents are recreated as
+  // targets move between nodes (T2.3), and a replacement agent restarts its
+  // sequence counters; scoping sequences to a stream id keeps the hub from
+  // reading a fresh counter as a gap, and lets it discard records from a
+  // superseded agent whose stream briefly overlaps its replacement.
+  string stream_id = 3;
+  repeated Target targets = 4;
+}
+
+message WatchTargetsRequest {
+  string session_id = 1;
+  string node = 2;
+  string agent_pod = 3;
+}
+
+// Agents ship batches to amortise gRPC overhead; the hub fans individual
+// records out to subscribers.
+message CaptureBatch {
+  string session_id = 1;
+  string node = 2;
+  // Must echo AgentAssignment.stream_id.
+  string stream_id = 3;
+  repeated CaptureRecord records = 4;
+  // Records the agent knows it lost (tcpdump/kernel drop counters) since the
+  // previous batch.
+  uint64 dropped = 5;
+}
+
+// End-of-stream tally only. Backpressure is gRPC flow control, and hub-side
+// drops are reported over ReportStatus/SessionStats while the capture runs:
+// nothing here reaches a still-streaming agent.
+message StreamCaptureSummary {
+  uint64 records_accepted = 1;
+}
+
+message ReportStatusRequest {
+  string session_id = 1;
+  string node = 2;
+  string stream_id = 3;
+  oneof payload {
+    AgentStateChanged agent_state = 10;
+    TlsStateChanged tls_state = 11;
+    SessionStats stats = 12;
+    CaptureError error = 13;
+  }
+}
+
+message ReportStatusResponse {}
+
+// Agent-facing API, served by the hub. Kept separate from HubService so agent
+// credentials and client credentials can diverge (Phase 4 authn).
+service AgentIngestService {
+  rpc WatchTargets(WatchTargetsRequest) returns (stream AgentAssignment);
+  rpc StreamCapture(stream CaptureBatch) returns (StreamCaptureSummary);
+  rpc ReportStatus(ReportStatusRequest) returns (ReportStatusResponse);
+}
