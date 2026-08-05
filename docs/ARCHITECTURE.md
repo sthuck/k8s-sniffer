@@ -399,7 +399,7 @@ Avoid writing custom eBPF C if an existing binary covers OpenSSL/Go.
 
 ---
 
-## 12. Phased delivery
+## 13. Phased delivery
 
 High-level phases below. **Concrete task IDs, dependencies, and acceptance criteria:** [TASKS.md](./TASKS.md).
 
@@ -437,7 +437,7 @@ Each phase should leave the previous CLI UX working.
 
 ---
 
-## 13. Open decisions (resolve before / during Phase 1)
+## 14. Open decisions (resolve before / during Phase 1)
 
 1. **Agent namespace:** same as targets vs dedicated system namespace?  
    - Recommendation: dedicated `k8s-sniffer` (or flag), to avoid polluting app namespaces.
@@ -446,10 +446,11 @@ Each phase should leave the previous CLI UX working.
 4. **TLS plaintext format:** synthetic PCAP vs JSONL events first?  
    - Recommendation: JSONL events in Phase 3, optional PCAP export after.
 5. **License/compliance** of vendored binaries (tcpdump, ecapture) in the agent image.
+6. **Language:** Go locked for Phase 1–4 (see [§10](#10-language-choice)).
 
 ---
 
-## 14. Comparison to existing tools (why build this)
+## 15. Comparison to existing tools (why build this)
 
 | Tool | Fit | Gap vs our goals |
 |------|-----|------------------|
@@ -462,7 +463,7 @@ Each phase should leave the previous CLI UX working.
 
 ---
 
-## 15. Success criteria for MVP
+## 16. Success criteria for MVP
 
 - One command captures traffic from all pods in a namespace matching a regex.
 - Agents appear only on nodes that need them and disappear when the session ends.
