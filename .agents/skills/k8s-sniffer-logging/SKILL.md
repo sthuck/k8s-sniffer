@@ -5,46 +5,59 @@ description: Add and configure structured slog logging in k8s-sniffer using pkg/
 
 # k8s-sniffer logging
 
-Use Go stdlib `log/slog` through `github.com/sthuck/k8s-sniffer/pkg/log`. Full reference: [docs/LOGGING.md](../../../docs/LOGGING.md).
+Use Go stdlib `log/slog` through `github.com/sthuck/k8s-sniffer/pkg/log`.
+
+**Source of truth:** [docs/LOGGING.md](../../../docs/LOGGING.md). On conflict, follow that doc (and `pkg/log`); keep this skill thin — do not duplicate its tables.
 
 ## Levels (only two)
 
-| Level | Meaning | Examples |
-|-------|---------|----------|
-| **info** | What happened | session created/stopped/failed, agent ready, client built |
-| **debug** | How it happened | list counts, selectors, wait start, filter results |
+| Level | Meaning |
+|-------|---------|
+| **info** | What happened (outcomes at boundaries) |
+| **debug** | How it happened (counts, selectors, wait start) |
 
 No separate `error` level — return errors to callers; log at **info** with `err` at operational boundaries.
 
 ## Quick setup
 
-**In `main`:** init before other work.
+**In `main`:** init before other work (match `cmd/k8s-sniffer/main.go` / `cmd/k8s-sniffer-agent/main.go`):
 
 ```go
-level, err := log.ResolveLevel(*logLevelFlag, os.Getenv(log.EnvLevel))
-if err != nil { /* exit 2 */ }
+import (
+	"fmt"
+	"log/slog"
+	"os"
+
+	"github.com/sthuck/k8s-sniffer/pkg/log"
+)
+
+level, err := log.ResolveLevel(*logLevel, os.Getenv(log.EnvLevel))
+if err != nil {
+	fmt.Fprintf(os.Stderr, "invalid --log-level: %v\n", err)
+	os.Exit(2)
+}
 log.Init(log.Config{Level: level})
 ```
 
-**In library packages:** one package-level logger (safe before `Init` — delegates at log time):
+**In library packages:** one package-level logger only — do **not** call `Init` from `pkg/*`. `WithComponent` delegates to `slog.Default()` at log time, so package `var` loggers are safe before `main` calls `Init`:
 
 ```go
 var hubLog = log.WithComponent("hub")
 ```
 
-Component names: `hub`, `agent`, `discovery`, `k8s`, `cli`.
+Component names: `hub`, `agent`, `discovery`, `k8s`, `cli` (extend only if [docs/LOGGING.md](../../../docs/LOGGING.md) is updated).
 
 ## Writing log lines
 
 ```go
 hubLog.Info("session running",
-    slog.String("session_id", sessionID),
-    slog.Int("nodes", len(nodes)),
+	slog.String("session_id", sessionID),
+	slog.Int("nodes", len(nodes)),
 )
 
 discoveryLog.Debug("filtered matching running pods",
-    slog.String("namespace", namespace),
-    slog.Int("matched", len(matched)),
+	slog.String("namespace", namespace),
+	slog.Int("matched", len(matched)),
 )
 ```
 
@@ -54,39 +67,21 @@ Rules:
 - Include `session_id` on hub/agent logs tied to a session
 - Do not log secrets, kubeconfig, or packet payloads
 
-## Where to log
+For where/when to log (and what to skip), read [docs/LOGGING.md](../../../docs/LOGGING.md).
 
-| Area | Info | Debug |
-|------|------|-------|
-| Hub RPC / lifecycle | create/stop/run/fail outcomes | spec, counts, grouping |
-| Agent lifecycle | create/reuse/ready/delete | selectors, wait start |
-| Discovery | — | list totals, match counts |
-| k8s client | client ready | host, user-agent |
-| CLI/agent main | process start | level configured |
-
-## Do not log
-
-- Unit tests (use `t.Log` if needed)
-- Generated protobuf/gRPC stubs
-- Pure validation in `pkg/capture`
-- Every poll tick in tight loops
-
-Session gRPC events (`WatchEvents`) are the user-facing audit trail; logs are for operators/developers.
-
-## Config surface
+## Config surface (summary)
 
 | Mechanism | Notes |
 |-----------|-------|
 | `K8S_SNIFFER_LOG_LEVEL` | `info` (default) or `debug` |
 | `--log-level` | CLI flag; overrides env |
-| `log.Init(Config{...})` | Tests and libraries |
-| `log.InitFromEnv()` | Returns error on invalid env value |
+| `log.Init(Config{...})` | Process entrypoints (`main`) and tests that need a configured default — not library packages |
+| `log.InitFromEnv()` | Env only; returns error on invalid value |
 
-Agent pods do **not** yet receive hub/CLI log level (T1.9). JSON output is programmatic-only (`Config.JSON`); no env/flag yet.
+Agent pods do **not** yet receive hub/CLI log level (T1.9). JSON is programmatic-only (`Config.JSON`).
 
-## Implementation notes
+## Notes
 
-- `WithComponent` uses `delegateHandler` — forwards to `slog.Default()` at log time, so package `var` loggers honor post-`Init` config.
 - Do not call `slog.SetDefault` from feature code; go through `pkg/log`.
 - Tests that call `Init` must **not** use `t.Parallel()` (global default races).
 
@@ -96,5 +91,5 @@ Agent pods do **not** yet receive hub/CLI log level (T1.9). JSON output is progr
 - [ ] Info at boundaries; debug for internals
 - [ ] `session_id` on session-scoped hub/agent lines
 - [ ] Return errors; don't log-and-swallow
-- [ ] `log.Init` early in new `main` packages
+- [ ] `log.Init` early in new `main` packages (not from libraries)
 - [ ] Update [docs/LOGGING.md](../../../docs/LOGGING.md) if adding a new component name or pattern
