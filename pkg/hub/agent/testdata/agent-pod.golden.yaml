@@ -3,6 +3,7 @@ metadata:
   generateName: k8s-sniffer-
   labels:
     app: k8s-sniffer-agent
+    sniffer.node: node-a
     sniffer.session: sess-abc123
   namespace: k8s-sniffer
 spec:
