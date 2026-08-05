@@ -14,3 +14,4 @@ Planning documents live in [`../docs`](../docs): [ARCHITECTURE.md](../docs/ARCHI
 | [S2-pod-matcher.md](./S2-pod-matcher.md) | T1.4 | Pod name regex matcher, Running-only filter, `PodRef` mapping |
 | [S2-node-grouping.md](./S2-node-grouping.md) | T1.5 | Map matched pods to `nodeName`; skip unscheduled pods with events |
 | [S2-agent-manifest.md](./S2-agent-manifest.md) | T1.6 | Privileged agent Pod manifest, labels, CRI socket volume |
+| [S2-agent-lifecycle.md](./S2-agent-lifecycle.md) | T1.7 | Create/wait/delete session-scoped agent pods |
