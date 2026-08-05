@@ -8,6 +8,7 @@ Planning. See:
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — design
 - **[docs/TASKS.md](docs/TASKS.md)** — phased task breakdown
+- **[docs/TESTING.md](docs/TESTING.md)** — unit / integration / kind+k3s e2e by phase
 
 ## Intended CLI (sketch)
 
