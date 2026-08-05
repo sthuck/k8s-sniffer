@@ -4,7 +4,10 @@ Lightweight Kubernetes traffic sniffer: match pods by namespace + regex, run nod
 
 ## Status
 
-Planning. See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the full design.
+Planning. See:
+
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — design
+- **[docs/TASKS.md](docs/TASKS.md)** — phased task breakdown
 
 ## Intended CLI (sketch)
 
