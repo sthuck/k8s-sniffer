@@ -188,7 +188,7 @@ Parallelizable after T1.1:
 - [x] T1.1 Repo layout — [specs/S1-skeleton-and-api.md](../specs/S1-skeleton-and-api.md)
 - [x] T1.2 Protobuf/gRPC stubs — [specs/S1-skeleton-and-api.md](../specs/S1-skeleton-and-api.md)
 - [x] T1.3 CaptureSpec — [specs/S1-skeleton-and-api.md](../specs/S1-skeleton-and-api.md)
-- [ ] T1.4 Pod matcher
+- [x] T1.4 Pod matcher — [specs/S2-pod-matcher.md](../specs/S2-pod-matcher.md)
 - [ ] T1.5 Node grouping
 - [ ] T1.6 Agent manifest
 - [ ] T1.7 Agent lifecycle
