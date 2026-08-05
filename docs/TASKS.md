@@ -203,6 +203,6 @@ Parallelizable after T1.1:
 - [ ] T1.16 RBAC docs/manifests
 - [ ] T1.17 Kind smoke test
 - [ ] T-TEST.1 E2e harness
-- [ ] T-TEST.2 CI workflows
+- [ ] T-TEST.2 CI workflows — interim `unit`/`make verify` gate in [`.github/workflows/verify.yml`](../.github/workflows/verify.yml); full unit+integration+e2e still open
 - [ ] T-TEST.3 envtest Hub lifecycle
 - [ ] T-TEST.7 E2e artifacts

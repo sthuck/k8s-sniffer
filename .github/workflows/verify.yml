@@ -1,14 +1,25 @@
+# Interim CI gate (pre–T-TEST.2): the `unit` job runs `make verify`
+# (proto-check + vet + go test ./...). Integration and e2e-kind jobs land
+# with T-TEST.2 / T1.17 as separate jobs in this workflow.
 name: verify
 
 on:
   pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  verify:
+  unit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -17,7 +28,15 @@ jobs:
           go-version-file: go.mod
 
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: |
+          set -euo pipefail
+          PROTOC_VERSION="$(sed -n 's/^PROTOC_VERSION ?= //p' Makefile)"
+          curl -fsSL -o /tmp/protoc.zip \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          sudo unzip -o /tmp/protoc.zip -d /usr/local bin/protoc
+          sudo unzip -o /tmp/protoc.zip -d /usr/local 'include/*'
+          rm /tmp/protoc.zip
+          protoc --version
 
       - name: Verify
         run: make verify

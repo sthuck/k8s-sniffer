@@ -16,9 +16,13 @@ capture pipeline do not yet — the CLI is still a stub.
 
 ```bash
 make build   # ./bin/k8s-sniffer, ./bin/k8s-sniffer-agent
-make verify  # proto-check + vet + test (the pre-push gate)
-make proto   # regenerate api/sniffer/v1 (needs protoc on PATH)
+make verify  # proto-check + vet + test (the pre-push / CI gate)
+make proto   # regenerate api/sniffer/v1 (needs protoc on PATH; pin PROTOC_VERSION)
 ```
+
+CI (`.github/workflows/verify.yml`) runs `make verify` on every PR and on pushes
+to `main`. Use `protoc` at `PROTOC_VERSION` from the Makefile so `proto-check`
+matches committed stubs.
 
 Release builds pin the privileged agent image by digest:
 
