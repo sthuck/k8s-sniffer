@@ -16,6 +16,7 @@ const testImage = "example.com/agent@sha256:000000000000000000000000000000000000
 func validAgentConfig() capture.AgentConfig {
 	cfg := capture.DefaultAgentConfig()
 	cfg.Image = testImage
+	cfg.HubIngestAddr = "127.0.0.1:50051"
 	return cfg
 }
 
@@ -88,6 +89,14 @@ func TestPodManifestDisablesServiceAccountToken(t *testing.T) {
 	}
 	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
 		t.Fatal("expected automountServiceAccountToken: false")
+	}
+}
+
+func TestPodManifestRequiresHubAddr(t *testing.T) {
+	cfg := validAgentConfig()
+	cfg.HubIngestAddr = ""
+	if _, err := PodManifest("sess-1", "node-a", cfg, 0); err == nil {
+		t.Fatal("expected error for empty hub ingest address")
 	}
 }
 

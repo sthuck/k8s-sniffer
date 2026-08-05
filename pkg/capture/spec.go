@@ -241,6 +241,9 @@ type AgentConfig struct {
 	// AllowMutableImage permits a tag-based image reference. Development and
 	// e2e flows (which load a locally built image into kind) set it explicitly.
 	AllowMutableImage bool
+	// HubIngestAddr is the gRPC dial target agents use for AgentIngestService
+	// (host:port, no scheme). Required when scheduling agent pods.
+	HubIngestAddr string
 }
 
 // Privileged reports whether the agent container should run privileged.

@@ -11,6 +11,16 @@ import (
 	"github.com/sthuck/k8s-sniffer/pkg/capture"
 )
 
+// Agent runtime environment variable names (also used by PodManifest).
+const (
+	envSessionID = "K8S_SNIFFER_SESSION_ID"
+	envNode      = "K8S_SNIFFER_NODE"
+	envAgentPod  = "K8S_SNIFFER_AGENT_POD"
+	envHubAddr   = "K8S_SNIFFER_HUB_ADDR"
+	envCRISocket = "K8S_SNIFFER_CRI_SOCKET"
+	envLogLevel  = "K8S_SNIFFER_LOG_LEVEL"
+)
+
 const (
 	// LabelAppKey identifies sniffer agent pods for list/delete RBAC.
 	LabelAppKey = "app"
@@ -54,6 +64,9 @@ func PodManifest(sessionID, nodeName string, cfg capture.AgentConfig, activeDead
 	if nodeName == "" {
 		return nil, fmt.Errorf("node name: required")
 	}
+	if cfg.HubIngestAddr == "" {
+		return nil, fmt.Errorf("agent hub ingest address: required")
+	}
 
 	securityContext := agentSecurityContext(cfg)
 	pullPolicy := corev1.PullIfNotPresent
@@ -83,6 +96,18 @@ func PodManifest(sessionID, nodeName string, cfg capture.AgentConfig, activeDead
 					Image:           cfg.Image,
 					ImagePullPolicy: pullPolicy,
 					SecurityContext: securityContext,
+					Env: []corev1.EnvVar{
+						{Name: envSessionID, Value: sessionID},
+						{Name: envNode, Value: nodeName},
+						{Name: envHubAddr, Value: cfg.HubIngestAddr},
+						{Name: envCRISocket, Value: cfg.CRISocketHostPath},
+						{
+							Name: envAgentPod,
+							ValueFrom: &corev1.EnvVarSource{
+								FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+							},
+						},
+					},
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							Name:      CRISocketVolumeName,

@@ -21,6 +21,7 @@ type sessionState struct {
 	lifecycleMu sync.Mutex
 	proto       *snifferv1.Session
 	events      *eventLog
+	packets     *packetLog
 	ctx         context.Context
 	cancel      context.CancelFunc
 	stopOnce    sync.Once
@@ -38,6 +39,7 @@ func newSessionState(id string, spec *snifferv1.CaptureSpec) *sessionState {
 			CreatedAt: timestamppb.Now(),
 		},
 		events:  newEventLog(),
+		packets: newPacketLog(),
 		ctx:     ctx,
 		cancel:  cancel,
 		agents:  make(map[string]agentRecord),

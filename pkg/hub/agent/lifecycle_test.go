@@ -20,6 +20,7 @@ const lifecycleTestImage = "example.com/agent@sha256:000000000000000000000000000
 func testAgentConfig() capture.AgentConfig {
 	cfg := capture.DefaultAgentConfig()
 	cfg.Image = lifecycleTestImage
+	cfg.HubIngestAddr = "127.0.0.1:50051"
 	return cfg
 }
 

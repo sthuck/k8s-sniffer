@@ -193,10 +193,10 @@ Parallelizable after T1.1:
 - [x] T1.6 Agent manifest — [specs/S2-agent-manifest.md](../specs/S2-agent-manifest.md)
 - [x] T1.7 Agent lifecycle — [specs/S2-agent-lifecycle.md](../specs/S2-agent-lifecycle.md)
 - [x] T1.8 In-process Hub — [specs/S2-in-process-hub.md](../specs/S2-in-process-hub.md)
-- [ ] T1.9 Agent bootstrap
-- [ ] T1.10 Netns resolve
-- [ ] T1.11 tcpdump in netns
-- [ ] T1.12 Frame stream to Hub
+- [x] T1.9 Agent bootstrap — [specs/S2-agent-capture.md](../specs/S2-agent-capture.md)
+- [x] T1.10 Netns resolve — [specs/S2-agent-capture.md](../specs/S2-agent-capture.md)
+- [x] T1.11 tcpdump in netns — [specs/S2-agent-capture.md](../specs/S2-agent-capture.md)
+- [x] T1.12 Frame stream to Hub — [specs/S2-agent-capture.md](../specs/S2-agent-capture.md)
 - [ ] T1.13 PCAP sink
 - [ ] T1.14 CLI capture
 - [ ] T1.15 Agent image

@@ -88,6 +88,7 @@ func (h *Hub) failSession(ctx context.Context, sess *sessionState, err error) *s
 	snapshot := sess.snapshot()
 	sess.signalStop()
 	sess.events.close()
+	sess.packets.close()
 	h.deleteSession(sessionID)
 	return snapshot
 }
@@ -282,6 +283,7 @@ func (h *Hub) stopSession(ctx context.Context, sess *sessionState) (*snifferv1.S
 	sess.emitState(sessionID, snifferv1.SessionState_SESSION_STATE_STOPPED)
 	snapshot := sess.snapshot()
 	sess.events.close()
+	sess.packets.close()
 	h.deleteSession(sessionID)
 	return snapshot, nil
 }
@@ -348,12 +350,46 @@ func (h *Hub) SubscribePackets(req *snifferv1.SubscribePacketsRequest, stream sn
 	if !ok {
 		return status.Errorf(codes.NotFound, "session %q not found", req.GetSessionId())
 	}
-	select {
-	case <-stream.Context().Done():
-		return stream.Context().Err()
-	case <-sess.done():
-		return nil
+	id, ch := sess.packets.subscribe()
+	defer sess.packets.unsubscribe(id)
+
+	for {
+		select {
+		case rec, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			if !recordMatchesFilter(rec, req.GetKinds()) {
+				continue
+			}
+			if err := stream.Send(rec); err != nil {
+				return err
+			}
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		case <-sess.done():
+			return nil
+		}
 	}
+}
+
+func recordMatchesFilter(rec *snifferv1.CaptureRecord, kinds []snifferv1.RecordKind) bool {
+	if len(kinds) == 0 {
+		return true
+	}
+	for _, k := range kinds {
+		switch k {
+		case snifferv1.RecordKind_RECORD_KIND_WIRE_FRAME:
+			if rec.GetWireFrame() != nil {
+				return true
+			}
+		case snifferv1.RecordKind_RECORD_KIND_TLS_EVENT:
+			if rec.GetTlsEvent() != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (h *Hub) WatchTargets(req *snifferv1.WatchTargetsRequest, stream snifferv1.AgentIngestService_WatchTargetsServer) error {
@@ -377,14 +413,28 @@ func (h *Hub) WatchTargets(req *snifferv1.WatchTargetsRequest, stream snifferv1.
 }
 
 func (h *Hub) StreamCapture(stream snifferv1.AgentIngestService_StreamCaptureServer) error {
+	var accepted uint64
 	for {
-		_, err := stream.Recv()
+		batch, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
-			return stream.SendAndClose(&snifferv1.StreamCaptureSummary{})
+			return stream.SendAndClose(&snifferv1.StreamCaptureSummary{RecordsAccepted: accepted})
 		}
 		if err != nil {
 			return err
 		}
+		sess, ok := h.getSession(batch.GetSessionId())
+		if !ok {
+			return status.Errorf(codes.NotFound, "session %q not found", batch.GetSessionId())
+		}
+		for _, rec := range batch.GetRecords() {
+			sess.packets.publish(rec)
+			accepted++
+		}
+		hubLog.Debug("capture batch ingested",
+			slog.String("session_id", batch.GetSessionId()),
+			slog.String("stream_id", batch.GetStreamId()),
+			slog.Int("records", len(batch.GetRecords())),
+		)
 	}
 }
 

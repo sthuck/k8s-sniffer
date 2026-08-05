@@ -1,15 +1,19 @@
 // Command k8s-sniffer-agent runs in the per-node agent pod. It receives an
 // AgentAssignment, captures each target netns, and streams frames to the hub.
-//
-// Placeholder: bootstrap and capture land with T1.9-T1.12.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/sthuck/k8s-sniffer/pkg/agent"
+	"github.com/sthuck/k8s-sniffer/pkg/agent/capture"
+	"github.com/sthuck/k8s-sniffer/pkg/agent/netns"
 	"github.com/sthuck/k8s-sniffer/pkg/log"
 )
 
@@ -32,13 +36,32 @@ func main() {
 	}
 	log.Init(log.Config{Level: level})
 
-	agentLog := log.WithComponent("agent")
-	agentLog.Info("k8s-sniffer-agent starting", slog.String("version", version))
-	agentLog.Debug("logging configured", slog.String("level", string(level)))
+	cliLog := log.WithComponent("agent")
+	cliLog.Info("k8s-sniffer-agent starting", slog.String("version", version))
 
-	fmt.Fprintf(os.Stderr, `k8s-sniffer-agent %s
+	cfg, err := agent.ConfigFromEnv()
+	if err != nil {
+		cliLog.Info("invalid configuration", slog.String("err", err.Error()))
+		os.Exit(2)
+	}
 
-The agent capture pipeline is not implemented yet (tasks T1.9-T1.12).
-`, version)
-	os.Exit(1)
+	resolver, err := netns.NewCRIResolver(context.Background(), "unix://"+cfg.CRISocket)
+	if err != nil {
+		cliLog.Info("cri resolver init failed", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	defer resolver.Close()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	runner := agent.NewRunner(agent.RunnerOptions{
+		Config:   cfg,
+		Resolver: resolver,
+		Tcpdump:  capture.Tcpdump{},
+	})
+	if err := runner.Run(ctx); err != nil && err != context.Canceled {
+		cliLog.Info("agent exited with error", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
 }
