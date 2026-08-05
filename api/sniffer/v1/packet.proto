@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package sniffer.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/sthuck/k8s-sniffer/api/sniffer/v1;snifferv1";
+
+// PodRef identifies a capture target across the whole system. Every packet and
+// event carries one so the client can tag PCAPng output without extra lookups.
+message PodRef {
+  string namespace = 1;
+  string name = 2;
+  string uid = 3;
+  string node = 4;
+  // Container runtime id (e.g. "containerd://<sha>") whose netns is captured.
+  string container_id = 5;
+}
+
+// Where a payload came from. TLS_PLAINTEXT is reserved for Phase 3 and is
+// never emitted by Phase 1 agents.
+enum PacketSource {
+  PACKET_SOURCE_UNSPECIFIED = 0;
+  PACKET_SOURCE_WIRE = 1;
+  PACKET_SOURCE_TLS_PLAINTEXT = 2;
+}
+
+// Values match libpcap DLT_* / pcap linktype numbers so sinks can pass them
+// straight into a pcap/pcapng writer.
+enum LinkType {
+  LINK_TYPE_UNSPECIFIED = 0;
+  LINK_TYPE_ETHERNET = 1;
+  LINK_TYPE_RAW = 101;
+  LINK_TYPE_LINUX_SLL = 113;
+  LINK_TYPE_LINUX_SLL2 = 276;
+}
+
+message PacketFrame {
+  PodRef pod = 1;
+  PacketSource source = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  LinkType link_type = 4;
+  // Length on the wire before snaplen truncation; equals len(payload) when the
+  // packet was captured whole.
+  uint32 original_length = 5;
+  bytes payload = 6;
+  // Per-agent monotonic counter, lets the hub detect gaps without timestamps.
+  uint64 sequence = 7;
+}
+
+// Agents ship batches to amortise gRPC overhead; the hub fans individual
+// frames out to subscribers.
+message PacketBatch {
+  string session_id = 1;
+  string node = 2;
+  repeated PacketFrame frames = 3;
+  // Packets the agent knows it lost (tcpdump/kernel drop counters) since the
+  // previous batch.
+  uint64 dropped = 4;
+}

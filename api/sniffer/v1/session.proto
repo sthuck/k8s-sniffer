@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package sniffer.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/sthuck/k8s-sniffer/api/sniffer/v1;snifferv1";
+
+// TLS handling requested for a session. Only TLS_MODE_OFF is honoured before
+// Phase 3; other modes are accepted by the API and reported as unsupported.
+enum TlsMode {
+  TLS_MODE_UNSPECIFIED = 0;
+  TLS_MODE_OFF = 1;
+  TLS_MODE_EBPF = 2;
+  TLS_MODE_KEYLOG = 3;
+  TLS_MODE_AUTO = 4;
+}
+
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  // Accepted, nothing scheduled yet.
+  SESSION_STATE_PENDING = 1;
+  // Pods discovered, agents being created / becoming ready.
+  SESSION_STATE_STARTING = 2;
+  // At least one agent is streaming.
+  SESSION_STATE_RUNNING = 3;
+  // Draining agents and sinks.
+  SESSION_STATE_STOPPING = 4;
+  SESSION_STATE_STOPPED = 5;
+  SESSION_STATE_FAILED = 6;
+}
+
+// Wire form of the client's capture request. Client-side concerns (output file
+// path, split-per-pod) are deliberately absent: sinks are attached by whoever
+// subscribes, not described here.
+message CaptureSpec {
+  string namespace = 1;
+  // Anchored-unanchored RE2 patterns matched against pod names; a pod matches
+  // if any pattern matches.
+  repeated string pod_patterns = 2;
+  // tcpdump-syntax capture filter applied inside every target netns.
+  string bpf_filter = 3;
+  // Hard stop for the session; zero means "until the client stops it".
+  google.protobuf.Duration duration = 4;
+  TlsMode tls_mode = 5;
+  // Per-packet capture length; zero means the agent default.
+  uint32 snaplen = 6;
+  // Namespace the ephemeral agent pods are created in.
+  string agent_namespace = 7;
+  // Fully qualified agent image reference.
+  string agent_image = 8;
+  // Node path of the CRI socket the agent uses to resolve container -> netns.
+  string agent_cri_socket = 9;
+  // Whether the agent container runs privileged. Optional so an omitting
+  // client gets the hub default (privileged) rather than a broken agent.
+  optional bool agent_privileged = 10;
+}
+
+message Session {
+  string id = 1;
+  CaptureSpec spec = 2;
+  SessionState state = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp stopped_at = 5;
+  // Nodes that currently host at least one matched pod (one agent each).
+  repeated string nodes = 6;
+  // Populated when state is SESSION_STATE_FAILED.
+  string failure_reason = 7;
+}

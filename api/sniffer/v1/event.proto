@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package sniffer.v1;
+
+import "google/protobuf/timestamp.proto";
+import "sniffer/v1/packet.proto";
+import "sniffer/v1/session.proto";
+
+option go_package = "github.com/sthuck/k8s-sniffer/api/sniffer/v1;snifferv1";
+
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_INFO = 1;
+  SEVERITY_WARNING = 2;
+  SEVERITY_ERROR = 3;
+}
+
+enum AgentPhase {
+  AGENT_PHASE_UNSPECIFIED = 0;
+  AGENT_PHASE_SCHEDULING = 1;
+  AGENT_PHASE_READY = 2;
+  AGENT_PHASE_CAPTURING = 3;
+  AGENT_PHASE_TERMINATING = 4;
+  AGENT_PHASE_GONE = 5;
+  AGENT_PHASE_FAILED = 6;
+}
+
+// Per-pod TLS outcome, reported by the agent's TLS worker in Phase 3.
+enum TlsStatus {
+  TLS_STATUS_UNSPECIFIED = 0;
+  TLS_STATUS_ACTIVE = 1;
+  TLS_STATUS_UNSUPPORTED = 2;
+  TLS_STATUS_DENIED = 3;
+  TLS_STATUS_FALLBACK = 4;
+}
+
+message PodAttached {
+  PodRef pod = 1;
+}
+
+message PodDetached {
+  PodRef pod = 1;
+  string reason = 2;
+}
+
+message AgentStateChanged {
+  string node = 1;
+  string agent_pod = 2;
+  AgentPhase phase = 3;
+  repeated PodRef targets = 4;
+}
+
+message TlsStateChanged {
+  PodRef pod = 1;
+  TlsStatus status = 2;
+  string detail = 3;
+}
+
+message SessionStateChanged {
+  SessionState state = 1;
+}
+
+message PodCounters {
+  PodRef pod = 1;
+  uint64 packets = 2;
+  uint64 bytes = 3;
+  uint64 dropped = 4;
+}
+
+message SessionStats {
+  uint64 packets = 1;
+  uint64 bytes = 2;
+  uint64 dropped = 3;
+  repeated PodCounters per_pod = 4;
+}
+
+// Everything the CLI prints (and a future UI renders) arrives as a structured
+// event rather than agent stdout.
+message SessionEvent {
+  string session_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  Severity severity = 3;
+  // Human-readable one-liner; payload carries the machine-readable detail.
+  string message = 4;
+
+  oneof payload {
+    SessionStateChanged session_state = 10;
+    PodAttached pod_attached = 11;
+    PodDetached pod_detached = 12;
+    AgentStateChanged agent_state = 13;
+    TlsStateChanged tls_state = 14;
+    SessionStats stats = 15;
+  }
+}
