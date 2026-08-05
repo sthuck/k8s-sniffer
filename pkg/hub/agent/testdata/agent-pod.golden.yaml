@@ -1,0 +1,29 @@
+metadata:
+  creationTimestamp: null
+  generateName: k8s-sniffer-
+  labels:
+    app: k8s-sniffer-agent
+    sniffer.session: sess-abc123
+  namespace: k8s-sniffer
+spec:
+  automountServiceAccountToken: false
+  containers:
+  - image: example.com/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    imagePullPolicy: IfNotPresent
+    name: agent
+    resources: {}
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - mountPath: /run/containerd/containerd.sock
+      name: cri-sock
+      readOnly: true
+  hostPID: true
+  nodeName: node-a
+  restartPolicy: Never
+  volumes:
+  - hostPath:
+      path: /run/containerd/containerd.sock
+      type: Socket
+    name: cri-sock
+status: {}
