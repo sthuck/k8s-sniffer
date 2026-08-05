@@ -3,6 +3,7 @@ package agent
 
 import (
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,6 +18,8 @@ const (
 	LabelAppValue = "k8s-sniffer-agent"
 	// LabelSessionKey scopes agent pods to a capture session.
 	LabelSessionKey = "sniffer.session"
+	// LabelNodeKey records which node the agent is pinned to (one per session+node).
+	LabelNodeKey = "sniffer.node"
 
 	// GenerateNamePrefix is the pod name prefix before the random suffix.
 	GenerateNamePrefix = "k8s-sniffer-"
@@ -38,7 +41,9 @@ var unprivilegedCapabilities = []corev1.Capability{
 
 // PodManifest returns a Pod spec for a node-local sniffer agent. The caller
 // creates the object in cfg.Namespace. sessionID must be non-empty.
-func PodManifest(sessionID, nodeName string, cfg capture.AgentConfig) (*corev1.Pod, error) {
+// activeDeadline, when positive, sets spec.activeDeadlineSeconds as a crash-
+// safety backstop when the hub process cannot run StopSession.
+func PodManifest(sessionID, nodeName string, cfg capture.AgentConfig, activeDeadline time.Duration) (*corev1.Pod, error) {
 	cfg = cfg.WithDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("agent config: %w", err)
@@ -64,13 +69,14 @@ func PodManifest(sessionID, nodeName string, cfg capture.AgentConfig) (*corev1.P
 			Labels: map[string]string{
 				LabelAppKey:     LabelAppValue,
 				LabelSessionKey: sessionID,
+				LabelNodeKey:    nodeName,
 			},
 		},
 		Spec: corev1.PodSpec{
-			NodeName:                       nodeName,
-			HostPID:                        true,
-			RestartPolicy:                  corev1.RestartPolicyNever,
-			AutomountServiceAccountToken:   &automountToken,
+			NodeName:                     nodeName,
+			HostPID:                      true,
+			RestartPolicy:                corev1.RestartPolicyNever,
+			AutomountServiceAccountToken: &automountToken,
 			Containers: []corev1.Container{
 				{
 					Name:            AgentContainerName,
@@ -98,6 +104,13 @@ func PodManifest(sessionID, nodeName string, cfg capture.AgentConfig) (*corev1.P
 				},
 			},
 		},
+	}
+	if activeDeadline > 0 {
+		secs := int64(activeDeadline.Seconds())
+		if secs < 1 {
+			secs = 1
+		}
+		pod.Spec.ActiveDeadlineSeconds = &secs
 	}
 	return pod, nil
 }

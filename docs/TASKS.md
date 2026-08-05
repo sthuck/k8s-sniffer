@@ -191,7 +191,7 @@ Parallelizable after T1.1:
 - [x] T1.4 Pod matcher — [specs/S2-pod-matcher.md](../specs/S2-pod-matcher.md)
 - [x] T1.5 Node grouping — [specs/S2-node-grouping.md](../specs/S2-node-grouping.md)
 - [x] T1.6 Agent manifest — [specs/S2-agent-manifest.md](../specs/S2-agent-manifest.md)
-- [x] T1.7 Agent lifecycle — [specs/S2-agent-lifecycle.md](../specs/S2-agent-lifecycle.md)
+- [ ] T1.7 Agent lifecycle — [specs/S2-agent-lifecycle.md](../specs/S2-agent-lifecycle.md)
 - [ ] T1.8 In-process Hub
 - [ ] T1.9 Agent bootstrap
 - [ ] T1.10 Netns resolve
