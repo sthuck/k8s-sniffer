@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -14,7 +15,10 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/sthuck/k8s-sniffer/pkg/capture"
+	"github.com/sthuck/k8s-sniffer/pkg/log"
 )
+
+var agentLog = log.WithComponent("agent")
 
 // DefaultReadyTimeout is how long CreateSession waits for an agent pod to become
 // Ready before failing the session.
@@ -47,6 +51,11 @@ func NewManager(client kubernetes.Interface, cfg capture.AgentConfig) *Manager {
 func (m *Manager) WithReadyTimeout(d time.Duration) *Manager {
 	m.readyTimeout = d
 	return m
+}
+
+// ReadyTimeout returns the configured agent Ready wait duration.
+func (m *Manager) ReadyTimeout() time.Duration {
+	return m.readyTimeout
 }
 
 // SessionLabelSelector returns the label selector for all agents in a session.
@@ -91,6 +100,12 @@ func (m *Manager) AgentOnNode(ctx context.Context, sessionID, nodeName string) (
 	if err != nil {
 		return nil, false, fmt.Errorf("list agent on node %q: %w", nodeName, err)
 	}
+	agentLog.Debug("listed agents on node",
+		slog.String("session_id", sessionID),
+		slog.String("node", nodeName),
+		slog.String("selector", selector),
+		slog.Int("count", len(list.Items)),
+	)
 	if len(list.Items) == 0 {
 		return nil, false, nil
 	}
@@ -103,6 +118,11 @@ func (m *Manager) CreateForNode(ctx context.Context, sessionID, nodeName string,
 	if existing, ok, err := m.AgentOnNode(ctx, sessionID, nodeName); err != nil {
 		return nil, err
 	} else if ok {
+		agentLog.Info("reusing existing agent pod",
+			slog.String("session_id", sessionID),
+			slog.String("node", nodeName),
+			slog.String("pod", existing.Name),
+		)
 		return existing, nil
 	}
 
@@ -110,16 +130,26 @@ func (m *Manager) CreateForNode(ctx context.Context, sessionID, nodeName string,
 	if err != nil {
 		return nil, err
 	}
+	agentLog.Debug("creating agent pod",
+		slog.String("session_id", sessionID),
+		slog.String("node", nodeName),
+		slog.String("namespace", m.cfg.Namespace),
+	)
 	created, err := m.client.CoreV1().Pods(m.cfg.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("create agent pod on node %q: %w", nodeName, err)
 	}
+	agentLog.Info("agent pod created",
+		slog.String("session_id", sessionID),
+		slog.String("node", nodeName),
+		slog.String("pod", created.Name),
+	)
 	return created, nil
 }
 
 // WaitReady blocks until pod is Running with all containers Ready or ctx/timeout
 // expires.
-func (m *Manager) WaitReady(ctx context.Context, pod *corev1.Pod) error {
+func (m *Manager) WaitReady(ctx context.Context, sessionID string, pod *corev1.Pod) error {
 	if pod == nil {
 		return fmt.Errorf("pod: required")
 	}
@@ -132,7 +162,14 @@ func (m *Manager) WaitReady(ctx context.Context, pod *corev1.Pod) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	return wait.PollUntilContextCancel(ctx, 200*time.Millisecond, true, func(ctx context.Context) (bool, error) {
+	agentLog.Debug("waiting for agent pod ready",
+		slog.String("session_id", sessionID),
+		slog.String("pod", pod.Name),
+		slog.String("namespace", pod.Namespace),
+		slog.Duration("timeout", timeout),
+	)
+
+	err := wait.PollUntilContextCancel(ctx, 200*time.Millisecond, true, func(ctx context.Context) (bool, error) {
 		current, err := m.client.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
@@ -166,6 +203,15 @@ func (m *Manager) WaitReady(ctx context.Context, pod *corev1.Pod) error {
 			return false, nil
 		}
 	})
+	if err != nil {
+		return err
+	}
+	agentLog.Info("agent pod ready",
+		slog.String("session_id", sessionID),
+		slog.String("pod", pod.Name),
+		slog.String("namespace", pod.Namespace),
+	)
+	return nil
 }
 
 func isRetriableAPIError(err error) bool {
@@ -240,6 +286,11 @@ func (m *Manager) DeleteSessionAgents(ctx context.Context, sessionID string) err
 	}
 	listOpts := metav1.ListOptions{LabelSelector: selector}
 
+	agentLog.Debug("deleting session agents",
+		slog.String("session_id", sessionID),
+		slog.String("selector", selector),
+	)
+
 	err = m.client.CoreV1().Pods(m.cfg.Namespace).DeleteCollection(ctx, deleteOpts, listOpts)
 	if err == nil {
 		remaining, listErr := m.ListSessionAgents(ctx, sessionID)
@@ -247,6 +298,9 @@ func (m *Manager) DeleteSessionAgents(ctx context.Context, sessionID string) err
 			return listErr
 		}
 		if len(remaining) == 0 {
+			agentLog.Info("session agents deleted",
+				slog.String("session_id", sessionID),
+			)
 			return nil
 		}
 	}
@@ -255,6 +309,10 @@ func (m *Manager) DeleteSessionAgents(ctx context.Context, sessionID string) err
 	if listErr != nil {
 		return errors.Join(err, listErr)
 	}
+	agentLog.Debug("delete collection incomplete, deleting individually",
+		slog.String("session_id", sessionID),
+		slog.Int("remaining", len(pods)),
+	)
 	var errs []error
 	if err != nil && !apierrors.IsNotFound(err) {
 		errs = append(errs, fmt.Errorf("delete collection: %w", err))
@@ -265,5 +323,16 @@ func (m *Manager) DeleteSessionAgents(ctx context.Context, sessionID string) err
 			errs = append(errs, fmt.Errorf("delete agent pod %s/%s: %w", pod.Namespace, pod.Name, delErr))
 		}
 	}
-	return errors.Join(errs...)
+	if joinErr := errors.Join(errs...); joinErr != nil {
+		agentLog.Info("session agent delete had errors",
+			slog.String("session_id", sessionID),
+			slog.String("err", joinErr.Error()),
+		)
+		return joinErr
+	}
+	agentLog.Info("session agents deleted",
+		slog.String("session_id", sessionID),
+		slog.Int("pods", len(pods)),
+	)
+	return nil
 }

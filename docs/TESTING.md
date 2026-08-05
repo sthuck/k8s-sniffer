@@ -2,6 +2,8 @@
 
 Maps test layers to delivery phases from [TASKS.md](./TASKS.md) / [ARCHITECTURE.md](./ARCHITECTURE.md).
 
+**Logging:** unit tests do not assert on slog output unless a test specifically covers logging behavior. See [LOGGING.md](./LOGGING.md).
+
 **Principle:** every feature task ships with the cheapest test that proves it; cluster e2e is reserved for paths that need a real node, netns, or CRI.
 
 ---

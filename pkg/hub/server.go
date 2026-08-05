@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -25,6 +26,17 @@ func (h *Hub) CreateSession(ctx context.Context, req *snifferv1.CreateSessionReq
 	}
 
 	sessionID := uuid.NewString()
+	hubLog.Info("session create started",
+		slog.String("session_id", sessionID),
+		slog.String("namespace", spec.Namespace),
+	)
+	hubLog.Debug("session spec",
+		slog.String("session_id", sessionID),
+		slog.Any("pod_patterns", spec.PodPatterns),
+		slog.String("bpf_filter", spec.BPFFilter),
+		slog.Duration("duration", spec.Duration),
+	)
+
 	wireSpec := spec.ToProto()
 	sess := newSessionState(sessionID, wireSpec)
 	h.putSession(sess)
@@ -35,16 +47,30 @@ func (h *Hub) CreateSession(ctx context.Context, req *snifferv1.CreateSessionReq
 	sess.lifecycleMu.Unlock()
 
 	if err != nil {
+		hubLog.Info("session create failed",
+			slog.String("session_id", sessionID),
+			slog.String("err", err.Error()),
+		)
 		failed := h.failSession(ctx, sess, err)
 		return &snifferv1.CreateSessionResponse{Session: failed}, nil
 	}
 
+	hubLog.Info("session create completed",
+		slog.String("session_id", sessionID),
+		slog.String("state", sess.snapshot().GetState().String()),
+	)
 	return &snifferv1.CreateSessionResponse{Session: sess.snapshot()}, nil
 }
 
 func (h *Hub) failSession(ctx context.Context, sess *sessionState, err error) *snifferv1.Session {
 	sessionID := sess.proto.Id
-	_ = h.agents.DeleteSessionAgents(ctx, sessionID)
+	hubLog.Debug("cleaning up failed session agents", slog.String("session_id", sessionID))
+	if delErr := h.agents.DeleteSessionAgents(ctx, sessionID); delErr != nil {
+		hubLog.Info("failed to delete agents for failed session",
+			slog.String("session_id", sessionID),
+			slog.String("err", delErr.Error()),
+		)
+	}
 	sess.setState(snifferv1.SessionState_SESSION_STATE_FAILED, err.Error())
 	sess.emitState(sessionID, snifferv1.SessionState_SESSION_STATE_FAILED)
 	sess.emit(&snifferv1.SessionEvent{
@@ -80,8 +106,17 @@ func (h *Hub) startSession(ctx context.Context, sess *sessionState, spec capture
 	if err != nil {
 		return fmt.Errorf("list pods: %w", err)
 	}
+	hubLog.Debug("discovery listed pods",
+		slog.String("session_id", sessionID),
+		slog.Int("matched", len(pods)),
+	)
 
 	groups, skipped := discovery.GroupByNode(pods)
+	hubLog.Debug("discovery grouped pods by node",
+		slog.String("session_id", sessionID),
+		slog.Int("nodes", len(groups)),
+		slog.Int("skipped", len(skipped)),
+	)
 	for _, skip := range skipped {
 		sess.emit(&snifferv1.SessionEvent{
 			SessionId: sessionID,
@@ -100,6 +135,10 @@ func (h *Hub) startSession(ctx context.Context, sess *sessionState, spec capture
 	}
 
 	if len(groups) == 0 {
+		hubLog.Info("no pods matched for session",
+			slog.String("session_id", sessionID),
+			slog.String("namespace", spec.Namespace),
+		)
 		return fmt.Errorf("no running pods matched in namespace %q", spec.Namespace)
 	}
 
@@ -144,7 +183,7 @@ func (h *Hub) startSession(ctx context.Context, sess *sessionState, spec capture
 			},
 		})
 
-		if err := h.agents.WaitReady(sess.context(), pod); err != nil {
+		if err := h.agents.WaitReady(sess.context(), sessionID, pod); err != nil {
 			return fmt.Errorf("wait for agent on node %q: %w", group.Node, err)
 		}
 
@@ -169,6 +208,11 @@ func (h *Hub) startSession(ctx context.Context, sess *sessionState, spec capture
 	sess.setNodes(nodes)
 	sess.setState(snifferv1.SessionState_SESSION_STATE_RUNNING, "")
 	sess.emitState(sessionID, snifferv1.SessionState_SESSION_STATE_RUNNING)
+	hubLog.Info("session running",
+		slog.String("session_id", sessionID),
+		slog.Int("nodes", len(nodes)),
+		slog.Any("node_names", nodes),
+	)
 	return nil
 }
 
@@ -199,14 +243,21 @@ func targetsFromAssignment(a *snifferv1.AgentAssignment) []*snifferv1.PodRef {
 }
 
 func (h *Hub) StopSession(ctx context.Context, req *snifferv1.StopSessionRequest) (*snifferv1.StopSessionResponse, error) {
-	sess, ok := h.getSession(req.GetSessionId())
+	sessionID := req.GetSessionId()
+	sess, ok := h.getSession(sessionID)
 	if !ok {
-		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionId())
+		return nil, status.Errorf(codes.NotFound, "session %q not found", sessionID)
 	}
+	hubLog.Info("session stop requested", slog.String("session_id", sessionID))
 	snapshot, err := h.stopSession(ctx, sess)
 	if err != nil {
+		hubLog.Info("session stop failed",
+			slog.String("session_id", sessionID),
+			slog.String("err", err.Error()),
+		)
 		return nil, status.Errorf(codes.Internal, "stop session: %v", err)
 	}
+	hubLog.Info("session stopped", slog.String("session_id", sessionID))
 	return &snifferv1.StopSessionResponse{Session: snapshot}, nil
 }
 
@@ -349,15 +400,21 @@ func (h *Hub) StopAll(ctx context.Context) error {
 	}
 	h.mu.RUnlock()
 
-	var first error
+	hubLog.Info("stopping all sessions", slog.Int("count", len(ids)))
+
+	var errs []error
 	for _, id := range ids {
 		sess, ok := h.getSession(id)
 		if !ok {
 			continue
 		}
-		if _, err := h.stopSession(ctx, sess); err != nil && first == nil {
-			first = err
+		if _, err := h.stopSession(ctx, sess); err != nil {
+			hubLog.Info("session stop failed during StopAll",
+				slog.String("session_id", id),
+				slog.String("err", err.Error()),
+			)
+			errs = append(errs, fmt.Errorf("session %q: %w", id, err))
 		}
 	}
-	return first
+	return errors.Join(errs...)
 }
