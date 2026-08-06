@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-fixtures
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: http-echo-a
+  namespace: e2e-fixtures
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: http-echo-a
+  template:
+    metadata:
+      labels:
+        app: http-echo-a
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo:1.0
+          args: ["-text=hello-a"]
+          ports:
+            - containerPort: 5678
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: http-echo-a
+  namespace: e2e-fixtures
+spec:
+  selector:
+    app: http-echo-a
+  ports:
+    - port: 5678
+      targetPort: 5678
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: http-echo-b
+  namespace: e2e-fixtures
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: http-echo-b
+  template:
+    metadata:
+      labels:
+        app: http-echo-b
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo:1.0
+          args: ["-text=hello-b"]
+          ports:
+            - containerPort: 5678
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: http-echo-b
+  namespace: e2e-fixtures
+spec:
+  selector:
+    app: http-echo-b
+  ports:
+    - port: 5678
+      targetPort: 5678

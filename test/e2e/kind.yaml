@@ -1,0 +1,5 @@
+# kind cluster config for k8s-sniffer e2e (single control-plane node).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane

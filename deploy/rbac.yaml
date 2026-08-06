@@ -1,0 +1,66 @@
+# Minimum RBAC for k8s-sniffer capture sessions.
+#
+# The operator's kubeconfig (CLI mode) or this ServiceAccount (in-cluster hub,
+# Phase 4) needs permission to list/watch workload pods and create/delete
+# ephemeral agent pods in the agent namespace.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: k8s-sniffer
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k8s-sniffer
+  namespace: k8s-sniffer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8s-sniffer-capture
+rules:
+  # Discover capture targets in any namespace (scoped by CLI --namespace).
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8s-sniffer-capture
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: k8s-sniffer-capture
+subjects:
+  - kind: ServiceAccount
+    name: k8s-sniffer
+    namespace: k8s-sniffer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k8s-sniffer-agent
+  namespace: k8s-sniffer
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k8s-sniffer-agent
+  namespace: k8s-sniffer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: k8s-sniffer-agent
+subjects:
+  - kind: ServiceAccount
+    name: k8s-sniffer
+    namespace: k8s-sniffer

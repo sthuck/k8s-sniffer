@@ -99,6 +99,15 @@ proto-check: require-protoc proto-tools
 		exit 1; \
 	fi
 
+.PHONY: image-agent image-cli docker-build
+image-agent:
+	docker build --target agent -t $(or $(AGENT_IMAGE),k8s-sniffer-agent:dev) .
+
+image-cli:
+	docker build --target cli -t $(or $(CLI_IMAGE),k8s-sniffer:dev) .
+
+docker-build: image-agent image-cli
+
 .PHONY: clean
 clean:
 	rm -rf $(LOCALBIN)

@@ -4,8 +4,16 @@ Lightweight Kubernetes traffic sniffer: match pods by namespace + regex, run nod
 
 ## Status
 
-Early Phase 1. The shared API and capture spec exist; discovery, agents and the
-capture pipeline do not yet — the CLI is still a stub.
+Phase 1 MVP wire path: discovery, hub scheduling, agent capture, CLI `capture`
+command, PCAP sink, agent image, RBAC manifests, and kind e2e harness.
+
+```bash
+k8s-sniffer capture -n NAMESPACE --pod 'REGEX' -o out.pcapng \
+  --agent-image k8s-sniffer-agent:e2e --allow-mutable-agent-image \
+  --hub-ingest-addr <host-reachable-from-pods>:30551
+```
+
+See [docs/TASKS.md](docs/TASKS.md) for remaining Phase 1 testing (T-TEST.2/3/7).
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — design
 - **[docs/TASKS.md](docs/TASKS.md)** — phased task breakdown + progress checklist
@@ -34,15 +42,27 @@ make build AGENT_IMAGE=ghcr.io/sthuck/k8s-sniffer-agent@sha256:...
 Development builds have no default agent image, so the image must be passed
 explicitly rather than resolving to a mutable tag.
 
-## Intended CLI (sketch)
+## Agent image & e2e
+
+```bash
+make image-agent AGENT_IMAGE=k8s-sniffer-agent:e2e
+kubectl apply -f deploy/rbac.yaml
+./test/e2e/run.sh kind    # create kind cluster, load image, apply fixtures
+./test/e2e/run.sh test    # E2E1.1 smoke (needs kind + docker)
+```
+
+## CLI
 
 ```bash
 k8s-sniffer capture \
   --namespace prod \
-  --pod 'payments-.*|checkout-.*' \
+  --pod 'payments-.*' --pod 'checkout-.*' \
   --out ./session.pcapng \
-  --tls auto
+  --agent-image ghcr.io/sthuck/k8s-sniffer-agent@sha256:... \
+  --hub-ingest-addr 172.18.0.1:30551
 ```
+
+TLS modes (`--tls auto`) land in Phase 3; Phase 1 is wire capture only.
 
 ## High-level shape
 
