@@ -53,14 +53,18 @@ test:
 ENVTEST_K8S_VERSION ?= 1.31.0
 SETUP_ENVTEST_VERSION ?= release-0.19
 ENVTEST := $(LOCALBIN)/setup-envtest
+ENVTEST_VERSION_STAMP := $(LOCALBIN)/.setup-envtest-$(SETUP_ENVTEST_VERSION)
 
 .PHONY: setup-envtest
-setup-envtest: $(ENVTEST)
-$(ENVTEST): $(LOCALBIN)
+setup-envtest: $(ENVTEST_VERSION_STAMP)
+$(ENVTEST_VERSION_STAMP): $(LOCALBIN)
 	GOBIN=$(LOCALBIN) $(GO) install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION)
+	@rm -f $(LOCALBIN)/.setup-envtest-*
+	@touch $@
 
 # Integration tests need a real apiserver (envtest). Not part of `make verify`
-# so unit CI stays fast; the `integration` GitHub Actions job runs this.
+# so unit CI stays fast. The T-TEST.2 `integration` job will run this once that
+# workflow lands (see specs/S2-ci-e2e.md).
 # Pin GOTOOLCHAIN=local so resolving setup-envtest / envtest does not pull a
 # newer Go toolchain than go.mod allows.
 .PHONY: integration-test

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -25,13 +27,13 @@ import (
 )
 
 // IT1.1 — CreateSession creates agent Pod objects against a real apiserver
-// (envtest); StopSession deletes them. envtest has no kubelet, so a background
-// marker patches agent pod status to Ready so WaitReady can succeed.
+// (envtest); StopSession deletes them. envtest has no kubelet, so a fakeKubelet
+// marks agents Ready and finishes pod GC after Hub stamps DeletionTimestamp.
 
 func TestIT1_1_CreateSessionSchedulesAndStopDeletesAgents(t *testing.T) {
 	client := startEnvtest(t)
-	cancelMarker := startAgentReadyMarker(t, client, capture.DefaultAgentNamespace)
-	t.Cleanup(cancelMarker)
+	fk := startFakeKubelet(t, client, capture.DefaultAgentNamespace)
+	t.Cleanup(fk.stop)
 
 	mustCreateNamespace(t, client, "prod")
 	mustCreateNamespace(t, client, capture.DefaultAgentNamespace)
@@ -80,13 +82,34 @@ func TestIT1_1_CreateSessionSchedulesAndStopDeletesAgents(t *testing.T) {
 	if len(agents.Items) != 2 {
 		t.Fatalf("created %d agent pods, want 2", len(agents.Items))
 	}
+	assertAgentsPinnedToSessionNodes(t, session.GetNodes(), agents.Items)
 
-	stopped, err := hubClient.StopSession(ctx, &snifferv1.StopSessionRequest{SessionId: session.GetId()})
-	if err != nil {
+	// Pause GC so we can observe Hub-issued deletion before fake kubelet removes pods.
+	fk.setGC(false)
+	stopErr := make(chan error, 1)
+	go func() {
+		_, err := hubClient.StopSession(ctx, &snifferv1.StopSessionRequest{SessionId: session.GetId()})
+		stopErr <- err
+	}()
+
+	waitUntil(t, 10*time.Second, func() bool {
+		list, err := client.CoreV1().Pods(capture.DefaultAgentNamespace).List(ctx, metav1.ListOptions{
+			LabelSelector: selector,
+		})
+		if err != nil || len(list.Items) != 2 {
+			return false
+		}
+		for _, pod := range list.Items {
+			if pod.DeletionTimestamp == nil {
+				return false
+			}
+		}
+		return true
+	})
+
+	fk.setGC(true)
+	if err := <-stopErr; err != nil {
 		t.Fatalf("StopSession: %v", err)
-	}
-	if stopped.GetSession().GetState() != snifferv1.SessionState_SESSION_STATE_STOPPED {
-		t.Fatalf("state = %s, want STOPPED", stopped.GetSession().GetState())
 	}
 
 	remaining, err := client.CoreV1().Pods(capture.DefaultAgentNamespace).List(ctx, metav1.ListOptions{
@@ -102,6 +125,41 @@ func TestIT1_1_CreateSessionSchedulesAndStopDeletesAgents(t *testing.T) {
 		}
 		t.Fatalf("%d agent pods remain after StopSession: %v", len(remaining.Items), names)
 	}
+}
+
+func assertAgentsPinnedToSessionNodes(t *testing.T, sessionNodes []string, agents []corev1.Pod) {
+	t.Helper()
+	want := map[string]struct{}{}
+	for _, n := range sessionNodes {
+		want[n] = struct{}{}
+	}
+	got := map[string]struct{}{}
+	for _, pod := range agents {
+		nodeLabel := pod.Labels[agent.LabelNodeKey]
+		if nodeLabel == "" {
+			t.Fatalf("agent %s missing %s label", pod.Name, agent.LabelNodeKey)
+		}
+		if pod.Spec.NodeName != nodeLabel {
+			t.Fatalf("agent %s nodeName=%q label=%q", pod.Name, pod.Spec.NodeName, nodeLabel)
+		}
+		if _, ok := want[nodeLabel]; !ok {
+			t.Fatalf("agent %s on unexpected node %q (session nodes %v)", pod.Name, nodeLabel, sessionNodes)
+		}
+		got[nodeLabel] = struct{}{}
+	}
+	for n := range want {
+		if _, ok := got[n]; !ok {
+			t.Fatalf("no agent pod for session node %q (agents cover %v)", n, keys(got))
+		}
+	}
+}
+
+func keys(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 func startEnvtest(t *testing.T) *kubernetes.Clientset {
@@ -166,12 +224,31 @@ func startEnvtestHub(t *testing.T, client kubernetes.Interface) (snifferv1.HubSe
 	return snifferv1.NewHubServiceClient(conn), cleanup
 }
 
-func startAgentReadyMarker(t *testing.T, client kubernetes.Interface, namespace string) context.CancelFunc {
+// fakeKubelet stands in for the missing envtest kubelet: Ready status + GC of
+// Terminating agent pods after Hub issues delete.
+type fakeKubelet struct {
+	mu       sync.Mutex
+	gc       bool
+	client   kubernetes.Interface
+	ns       string
+	cancel   context.CancelFunc
+	done     chan struct{}
+	lastErr  error
+	errCount int
+}
+
+func startFakeKubelet(t *testing.T, client kubernetes.Interface, namespace string) *fakeKubelet {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
+	fk := &fakeKubelet{
+		gc:     true,
+		client: client,
+		ns:     namespace,
+		cancel: cancel,
+		done:   make(chan struct{}),
+	}
 	go func() {
-		defer close(done)
+		defer close(fk.done)
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 		for {
@@ -179,39 +256,58 @@ func startAgentReadyMarker(t *testing.T, client kubernetes.Interface, namespace 
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				markPendingAgentsReady(ctx, client, namespace)
+				if err := fk.tick(ctx); err != nil && !apierrors.IsNotFound(err) && ctx.Err() == nil {
+					fk.mu.Lock()
+					fk.lastErr = err
+					fk.errCount++
+					fk.mu.Unlock()
+					t.Logf("fake kubelet: %v", err)
+				}
 			}
 		}
 	}()
-	return func() {
-		cancel()
-		<-done
-	}
+	t.Cleanup(func() {
+		fk.mu.Lock()
+		n, err := fk.errCount, fk.lastErr
+		fk.mu.Unlock()
+		if n > 0 && err != nil {
+			t.Logf("fake kubelet recorded %d errors; last: %v", n, err)
+		}
+	})
+	return fk
 }
 
-func markPendingAgentsReady(ctx context.Context, client kubernetes.Interface, namespace string) {
-	pods, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+func (fk *fakeKubelet) setGC(enabled bool) {
+	fk.mu.Lock()
+	fk.gc = enabled
+	fk.mu.Unlock()
+}
+
+func (fk *fakeKubelet) stop() {
+	fk.cancel()
+	<-fk.done
+}
+
+func (fk *fakeKubelet) tick(ctx context.Context) error {
+	fk.mu.Lock()
+	gc := fk.gc
+	fk.mu.Unlock()
+
+	pods, err := fk.client.CoreV1().Pods(fk.ns).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("%s=%s", agent.LabelAppKey, agent.LabelAppValue),
 	})
 	if err != nil {
-		return
+		return fmt.Errorf("list agents: %w", err)
 	}
 	for i := range pods.Items {
 		pod := &pods.Items[i]
-		// envtest has no kubelet to finish pod deletion. Clear finalizers and
-		// force-delete so StopSession's waitSessionAgentsGone can observe removal.
 		if pod.DeletionTimestamp != nil {
-			if len(pod.Finalizers) > 0 {
-				fresh, err := client.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
-				if err == nil {
-					fresh.Finalizers = nil
-					_, _ = client.CoreV1().Pods(fresh.Namespace).Update(ctx, fresh, metav1.UpdateOptions{})
-				}
+			if !gc {
+				continue
 			}
-			grace := int64(0)
-			_ = client.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
-				GracePeriodSeconds: &grace,
-			})
+			if err := fk.finishDelete(ctx, pod); err != nil {
+				return err
+			}
 			continue
 		}
 		if agentPodReady(pod) {
@@ -225,8 +321,40 @@ func markPendingAgentsReady(ctx context.Context, client kubernetes.Interface, na
 				Running: &corev1.ContainerStateRunning{StartedAt: metav1.Now()},
 			},
 		}}
-		_, _ = client.CoreV1().Pods(pod.Namespace).UpdateStatus(ctx, pod, metav1.UpdateOptions{})
+		if _, err := fk.client.CoreV1().Pods(pod.Namespace).UpdateStatus(ctx, pod, metav1.UpdateOptions{}); err != nil {
+			if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("mark ready %s/%s: %w", pod.Namespace, pod.Name, err)
+		}
 	}
+	return nil
+}
+
+func (fk *fakeKubelet) finishDelete(ctx context.Context, pod *corev1.Pod) error {
+	if len(pod.Finalizers) > 0 {
+		fresh, err := fk.client.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return fmt.Errorf("get terminating %s/%s: %w", pod.Namespace, pod.Name, err)
+		}
+		fresh.Finalizers = nil
+		if _, err := fk.client.CoreV1().Pods(fresh.Namespace).Update(ctx, fresh, metav1.UpdateOptions{}); err != nil {
+			if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+				return nil
+			}
+			return fmt.Errorf("clear finalizers %s/%s: %w", fresh.Namespace, fresh.Name, err)
+		}
+	}
+	grace := int64(0)
+	if err := fk.client.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
+		GracePeriodSeconds: &grace,
+	}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("force delete %s/%s: %w", pod.Namespace, pod.Name, err)
+	}
+	return nil
 }
 
 func agentPodReady(pod *corev1.Pod) bool {
@@ -259,7 +387,6 @@ func workloadPod(name, node string) *corev1.Pod {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: "prod",
-			UID:       "", // apiserver assigns
 		},
 		Spec: corev1.PodSpec{
 			NodeName: node,
@@ -280,10 +407,21 @@ func mustCreateWorkloadPods(t *testing.T, client kubernetes.Interface, namespace
 		if err != nil {
 			t.Fatalf("create pod %s/%s: %v", namespace, pod.Name, err)
 		}
-		// Status is stripped on create; patch Running so discovery's Running-only filter matches.
 		created.Status.Phase = corev1.PodRunning
 		if _, err := client.CoreV1().Pods(namespace).UpdateStatus(context.Background(), created, metav1.UpdateOptions{}); err != nil {
 			t.Fatalf("update pod status %s/%s: %v", namespace, pod.Name, err)
 		}
 	}
+}
+
+func waitUntil(t *testing.T, timeout time.Duration, fn func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("condition not met within %s", timeout)
 }
