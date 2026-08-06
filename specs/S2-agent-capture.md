@@ -42,6 +42,10 @@ cluster agent. T1.14 (`capture` command) will define how the CLI advertises a
 node-reachable ingest address (port-forward, hostNetwork relay, or similar).
 Until then, golden manifests use loopback for unit tests only.
 
+The per-incarnation stream credential binds bootstrap and ingest to the created
+agent pod, but MVP gRPC transport is still plaintext. A future node-reachable
+listener must remain on a trusted/private path until Phase 4 adds mTLS.
+
 ## 2. Netns resolution (T1.10)
 
 Package: `pkg/agent/netns`.
@@ -49,7 +53,7 @@ Package: `pkg/agent/netns`.
 `CRIResolver` dials the node CRI socket (`unix://` + mounted path) and:
 
 1. Lists READY pod sandboxes by name, namespace, and UID labels and chooses the
-   newest unambiguous match.
+   newest UID match.
 2. Picks a running workload container (skips `POD` infra when possible;
    sorts by name for stable choice; honors `PodRef.container_id` when set).
 3. Reads the container PID from verbose `ContainerStatus` info (containerd nests
@@ -57,6 +61,10 @@ Package: `pkg/agent/netns`.
 4. Returns `/proc/<pid>/ns/net`.
 
 `MapResolver` supports unit tests without a real CRI socket.
+
+The CRI socket is a node-level trust boundary: a read-only socket mount does not
+restrict CRI RPC methods. The privileged agent image must therefore remain
+digest-pinned; a least-privilege CRI proxy is a later hardening option.
 
 ## 3. tcpdump capture (T1.11)
 
@@ -89,9 +97,12 @@ stderr is drained concurrently with a size cap and included in process errors.
 Hub (`pkg/hub/packets.go`):
 
 - `StreamCapture` validates batch `session_id`, `node`, and `stream_id` against
-  the live assignment, bounds batch size, and verifies each record's pod.
+  the live assignment, permits only one active stream per agent incarnation,
+  bounds batch size, and verifies each record's pod.
 - Ingest waits for the first `SubscribePackets` client and applies backpressure
   through gRPC rather than silently dropping records.
+- Session stop accepts in-flight batches while agents receive a short graceful
+  termination window, then closes packet subscribers after agents are gone.
 - Sequence numbers are monotonic across every target in one agent incarnation.
 - Per-target failures are emitted through `ReportStatus` as structured events.
 - Returns `StreamCaptureSummary.records_accepted`.

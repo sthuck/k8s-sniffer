@@ -267,6 +267,17 @@ func validateAssignment(cfg Config, assignment *snifferv1.AgentAssignment) error
 	if assignment.GetStreamId() == "" || assignment.GetStreamId() != cfg.StreamID {
 		return fmt.Errorf("assignment stream_id mismatch")
 	}
+	if len(assignment.GetTargets()) == 0 {
+		return fmt.Errorf("assignment targets: at least one required")
+	}
+	for i, target := range assignment.GetTargets() {
+		if target.GetPod().GetNamespace() == "" || target.GetPod().GetName() == "" || target.GetPod().GetUid() == "" {
+			return fmt.Errorf("assignment targets[%d]: complete pod identity required", i)
+		}
+		if target.GetPod().GetNode() != cfg.Node {
+			return fmt.Errorf("assignment targets[%d]: pod node mismatch", i)
+		}
+	}
 	return nil
 }
 

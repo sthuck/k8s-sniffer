@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -27,7 +28,9 @@ func TestValidateCaptureBatchRequiresStreamIdentity(t *testing.T) {
 func TestValidateCaptureBatchRejectsUnassignedPod(t *testing.T) {
 	sess, batch := testCaptureSession()
 	sess.setState(snifferv1.SessionState_SESSION_STATE_RUNNING, "")
-	batch.Records[0].GetWireFrame().Pod.Name = "other"
+	pod := proto.Clone(batch.Records[0].GetWireFrame().GetPod()).(*snifferv1.PodRef)
+	pod.Name = "other"
+	batch.Records[0].GetWireFrame().Pod = pod
 	if err := sess.validateCaptureBatch(batch); err == nil {
 		t.Fatal("expected unassigned pod to be rejected")
 	}
@@ -43,6 +46,20 @@ func TestAssignmentForRequiresPodAndStream(t *testing.T) {
 	}
 	if _, err := sess.assignmentFor("node-a", "agent-a", "stream-a"); err != nil {
 		t.Fatalf("assignmentFor: %v", err)
+	}
+}
+
+func TestClaimCaptureStreamRejectsConcurrentStream(t *testing.T) {
+	sess, _ := testCaptureSession()
+	if err := sess.claimCaptureStream("node-a", "stream-a"); err != nil {
+		t.Fatalf("claimCaptureStream: %v", err)
+	}
+	if err := sess.claimCaptureStream("node-a", "stream-a"); err == nil {
+		t.Fatal("expected concurrent capture stream to be rejected")
+	}
+	sess.releaseCaptureStream("node-a", "stream-a")
+	if err := sess.claimCaptureStream("node-a", "stream-a"); err != nil {
+		t.Fatalf("claim after release: %v", err)
 	}
 }
 

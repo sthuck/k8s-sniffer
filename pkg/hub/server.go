@@ -418,6 +418,13 @@ func (h *Hub) WatchTargets(req *snifferv1.WatchTargetsRequest, stream snifferv1.
 
 func (h *Hub) StreamCapture(stream snifferv1.AgentIngestService_StreamCaptureServer) error {
 	var accepted uint64
+	var claimedSession *sessionState
+	var claimedNode, claimedStreamID string
+	defer func() {
+		if claimedSession != nil {
+			claimedSession.releaseCaptureStream(claimedNode, claimedStreamID)
+		}
+	}()
 	for {
 		batch, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -429,6 +436,16 @@ func (h *Hub) StreamCapture(stream snifferv1.AgentIngestService_StreamCaptureSer
 		sess, ok := h.getSession(batch.GetSessionId())
 		if !ok {
 			return status.Errorf(codes.NotFound, "session %q not found", batch.GetSessionId())
+		}
+		if claimedSession == nil {
+			if err := sess.claimCaptureStream(batch.GetNode(), batch.GetStreamId()); err != nil {
+				return status.Errorf(codes.FailedPrecondition, "capture stream: %v", err)
+			}
+			claimedSession = sess
+			claimedNode = batch.GetNode()
+			claimedStreamID = batch.GetStreamId()
+		} else if sess != claimedSession || batch.GetNode() != claimedNode || batch.GetStreamId() != claimedStreamID {
+			return status.Error(codes.FailedPrecondition, "capture stream identity changed")
 		}
 		if err := sess.validateCaptureBatch(batch); err != nil {
 			return status.Errorf(codes.FailedPrecondition, "capture batch: %v", err)

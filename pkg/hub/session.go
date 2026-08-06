@@ -20,6 +20,7 @@ type agentRecord struct {
 	podName      string
 	streamID     string
 	lastSequence uint64
+	ingestActive bool
 }
 
 // sessionState is the in-memory hub state for one capture session.
@@ -194,6 +195,32 @@ func (s *sessionState) validateAgentEnvelope(sessionID, node, streamID string) e
 		return fmt.Errorf("stream_id mismatch")
 	}
 	return nil
+}
+
+func (s *sessionState) claimCaptureStream(node, streamID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.agents[node]
+	if !ok || streamID == "" || streamID != rec.streamID {
+		return fmt.Errorf("agent identity mismatch")
+	}
+	if rec.ingestActive {
+		return fmt.Errorf("capture stream already active")
+	}
+	rec.ingestActive = true
+	s.agents[node] = rec
+	return nil
+}
+
+func (s *sessionState) releaseCaptureStream(node, streamID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.agents[node]
+	if !ok || rec.streamID != streamID {
+		return
+	}
+	rec.ingestActive = false
+	s.agents[node] = rec
 }
 
 func validateCaptureRecord(record *snifferv1.CaptureRecord, assignment *snifferv1.AgentAssignment) (int, error) {

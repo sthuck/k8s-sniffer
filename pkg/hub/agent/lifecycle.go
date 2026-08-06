@@ -23,6 +23,7 @@ var agentLog = log.WithComponent("agent")
 // DefaultReadyTimeout is how long CreateSession waits for an agent pod to become
 // Ready before failing the session.
 const DefaultReadyTimeout = 2 * time.Minute
+const defaultDeleteTimeout = 30 * time.Second
 
 // Manager creates, watches, and deletes ephemeral agent pods for a session.
 type Manager struct {
@@ -280,7 +281,7 @@ func (m *Manager) DeleteSessionAgents(ctx context.Context, sessionID string) err
 	if err != nil {
 		return err
 	}
-	grace := int64(0)
+	grace := int64(5)
 	propagation := metav1.DeletePropagationBackground
 	deleteOpts := metav1.DeleteOptions{
 		GracePeriodSeconds: &grace,
@@ -332,9 +333,27 @@ func (m *Manager) DeleteSessionAgents(ctx context.Context, sessionID string) err
 		)
 		return joinErr
 	}
+	if err := m.waitSessionAgentsGone(ctx, sessionID); err != nil {
+		return err
+	}
 	agentLog.Info("session agents deleted",
 		slog.String("session_id", sessionID),
 		slog.Int("pods", len(pods)),
 	)
 	return nil
+}
+
+func (m *Manager) waitSessionAgentsGone(ctx context.Context, sessionID string) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultDeleteTimeout)
+	defer cancel()
+	return wait.PollUntilContextCancel(ctx, 200*time.Millisecond, true, func(ctx context.Context) (bool, error) {
+		pods, err := m.ListSessionAgents(ctx, sessionID)
+		if err != nil {
+			if isRetriableAPIError(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return len(pods) == 0, nil
+	})
 }
