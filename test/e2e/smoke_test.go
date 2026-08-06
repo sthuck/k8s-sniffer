@@ -51,21 +51,25 @@ func TestE2E1_1_SmokeCapture(t *testing.T) {
 
 	waitForDeployments(t, client, "e2e-fixtures", "http-echo-a", "http-echo-b")
 
+	artifactDir := os.Getenv("K8S_SNIFFER_E2E_ARTIFACT_DIR")
 	outPath := filepath.Join(t.TempDir(), "capture.pcapng")
-	if dir := os.Getenv("K8S_SNIFFER_E2E_ARTIFACT_DIR"); dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+	if artifactDir != "" {
+		if err := os.MkdirAll(artifactDir, 0o755); err != nil {
 			t.Fatalf("artifact dir: %v", err)
 		}
-		outPath = filepath.Join(dir, "capture.pcapng")
-		t.Cleanup(func() {
-			if !t.Failed() {
-				return
-			}
-			dumpAgentLogs(t, client, dir)
-		})
+		outPath = filepath.Join(artifactDir, "capture.pcapng")
 	}
+
+	// Cancel via t.Cleanup (not defer) so failure dumps run *before* StopSession
+	// tears down agent pods. t.Cleanup runs after deferred funcs, so defer cancel
+	// would delete agents before dumpAgentLogs could read them.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
+	t.Cleanup(func() {
+		if t.Failed() && artifactDir != "" {
+			dumpAgentLogs(t, client, artifactDir)
+		}
+		cancel()
+	})
 
 	sessionReady := make(chan struct{})
 	captureDone := make(chan error, 1)
@@ -99,6 +103,8 @@ func TestE2E1_1_SmokeCapture(t *testing.T) {
 
 	select {
 	case <-sessionReady:
+	case err := <-captureDone:
+		t.Fatalf("capture ended before session ready: %v", err)
 	case <-time.After(2 * time.Minute):
 		t.Fatal("timed out waiting for capture session to become ready")
 	}

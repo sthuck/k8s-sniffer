@@ -25,11 +25,12 @@ Triggers, concurrency, and `contents: read` permissions match S0.
 | Artifact | Source |
 |----------|--------|
 | `capture.pcapng` | E2E1.1 writes PCAP into the artifact dir when set |
-| `agent-logs.txt` | Go test cleanup on failure (`kubectl` logs via client-go) |
-| `cluster-dump.txt` | `run.sh` on test failure: pods, agent YAML, fixture describe |
+| `agent-logs.txt` | Go `t.Cleanup` dumps logs **before** cancelling capture context |
+| `cluster-dump.txt` | `run.sh` on `cluster_up` or test failure |
 
-CI uploads `test/e2e/artifacts/` with `actions/upload-artifact@v4` when
-`e2e-kind` fails (`if-no-files-found: ignore`, 7-day retention).
+`run.sh` clears the artifact dir at the start of each run. CI uploads with
+`if-no-files-found: warn` (7-day retention). Kind binary is sha256-verified
+before install (`KIND_SHA256` in the workflow).
 
 ## 3. Out of scope
 

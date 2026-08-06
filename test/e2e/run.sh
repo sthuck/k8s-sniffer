@@ -28,10 +28,11 @@ HUB_INGEST_ADDR="${HUB_INGEST_HOST}:${HUB_INGEST_PORT}"
 
 usage() {
   cat <<EOF
-Usage: $0 <kind|test>
+Usage: $0 [kind|test|all]
 
   kind   Create/load kind cluster, build images, apply fixtures
   test   Run e2e tests (expects cluster + images ready)
+  all    cluster-up + test (default; CI entrypoint)
 
 Environment:
   KIND_CLUSTER_NAME            kind cluster name (default: k8s-sniffer-e2e)
@@ -47,6 +48,12 @@ ensure_kind() {
     echo "kind is required for e2e; install https://kind.sigs.k8s.io/" >&2
     exit 1
   fi
+}
+
+clear_artifact_dir() {
+  mkdir -p "$ARTIFACT_DIR"
+  # Remove prior-run files so a failed retry does not upload a stale pcap.
+  find "$ARTIFACT_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 }
 
 cluster_up() {
@@ -96,11 +103,20 @@ run_tests() {
   export K8S_SNIFFER_E2E_KUBECONTEXT="kind-${CLUSTER_NAME}"
   export K8S_SNIFFER_E2E_HUB_INGEST_ADDR="$HUB_INGEST_ADDR"
   export K8S_SNIFFER_E2E_ARTIFACT_DIR="$ARTIFACT_DIR"
-  mkdir -p "$ARTIFACT_DIR"
+  clear_artifact_dir
   if ! (cd "$ROOT" && go test -tags=e2e -count=1 -timeout=15m ./test/e2e/...); then
     dump_failure_artifacts
     return 1
   fi
+}
+
+run_all() {
+  clear_artifact_dir
+  if ! cluster_up; then
+    dump_failure_artifacts
+    return 1
+  fi
+  run_tests
 }
 
 case "${1:-}" in
@@ -110,12 +126,14 @@ case "${1:-}" in
   test)
     run_tests
     ;;
+  ""|all)
+    run_all
+    ;;
   -h|--help)
     usage
     ;;
-  ""|all|*)
-    # Default / any other arg: bring cluster up and run E2E1.1 (CI entrypoint).
-    cluster_up
-    run_tests
+  *)
+    usage >&2
+    exit 2
     ;;
 esac

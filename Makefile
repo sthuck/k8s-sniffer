@@ -63,8 +63,8 @@ $(ENVTEST_VERSION_STAMP): $(LOCALBIN)
 	@touch $@
 
 # Integration tests need a real apiserver (envtest). Not part of `make verify`
-# so unit CI stays fast. The T-TEST.2 `integration` job will run this once that
-# workflow lands (see specs/S2-ci-e2e.md).
+# so unit CI stays fast; the `integration` GitHub Actions job runs this
+# (specs/S2-ci-e2e.md).
 # Pin GOTOOLCHAIN=local so resolving setup-envtest / envtest does not pull a
 # newer Go toolchain than go.mod allows.
 .PHONY: integration-test
