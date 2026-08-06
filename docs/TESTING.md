@@ -73,7 +73,7 @@ CI shape (evolve over phases):
 | Job | When | Command | Status |
 |-----|------|---------|--------|
 | `unit` | every PR + push to `main` | `make verify` (proto-check, vet, `go test ./...`) | Live in [`.github/workflows/verify.yml`](../.github/workflows/verify.yml) (pre–T-TEST.2 slice) |
-| `integration` | every PR | `go test ./pkg/... -tags=integration` (envtest) | Planned (T-TEST.2 / T-TEST.3) |
+| `integration` | every PR | `make integration-test` (envtest IT1.1) | Test ready (T-TEST.3); CI job lands with T-TEST.2 |
 | `e2e-kind` | every PR after T1.17 | `./test/e2e/run.sh kind` | Planned (T-TEST.2) |
 | `e2e-kind-tls` | every PR after T3.9 (or nightly if flaky) | `./test/e2e/run.sh kind -tags e2e_tls` | Planned |
 | `e2e-k3s` | nightly / manual | `./test/e2e/run.sh k3s` | Planned |

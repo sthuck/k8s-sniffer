@@ -204,5 +204,5 @@ Parallelizable after T1.1:
 - [x] T1.17 Kind smoke test — [specs/S2-cli-sink.md](../specs/S2-cli-sink.md)
 - [x] T-TEST.1 E2e harness — [specs/S2-cli-sink.md](../specs/S2-cli-sink.md)
 - [ ] T-TEST.2 CI workflows — interim `unit`/`make verify` gate in [`.github/workflows/verify.yml`](../.github/workflows/verify.yml); full unit+integration+e2e still open
-- [ ] T-TEST.3 envtest Hub lifecycle
+- [x] T-TEST.3 envtest Hub lifecycle — [specs/S2-envtest-hub.md](../specs/S2-envtest-hub.md)
 - [ ] T-TEST.7 E2e artifacts

@@ -32,8 +32,9 @@ Package: `pkg/hub/agent`.
 ## 3. Acceptance / testing
 
 Unit tests cover create, idempotent re-create, wait ready, fast-fail paths, and delete.
-IT1.1-style create/delete integration is exercised in T1.8 `hub_test` (fake clientset).
-Full envtest (T-TEST.3) is a follow-up; T1.7 checkbox is marked done when T1.8 lands.
+IT1.1-style create/delete against the fake clientset lives in T1.8 `hub_test`.
+Full envtest (T-TEST.3 / **IT1.1**) is in [S2-envtest-hub.md](./S2-envtest-hub.md).
+`DeleteSessionAgents` uses grace period 0 (ephemeral agents).
 
 Hub calls `CreateForNode` + `WaitReady` per `NodeGroup`, then records the
 assignment for `WatchTargets`. Cleanup uses `DeleteSessionAgents` from

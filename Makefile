@@ -48,6 +48,26 @@ build: $(LOCALBIN)
 test:
 	$(GO) test ./...
 
+# Kubernetes version for envtest binaries (IT1.1 / T-TEST.3). Keep aligned with
+# the client-go minor in go.mod (currently 0.31.x).
+ENVTEST_K8S_VERSION ?= 1.31.0
+SETUP_ENVTEST_VERSION ?= release-0.19
+ENVTEST := $(LOCALBIN)/setup-envtest
+
+.PHONY: setup-envtest
+setup-envtest: $(ENVTEST)
+$(ENVTEST): $(LOCALBIN)
+	GOBIN=$(LOCALBIN) $(GO) install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION)
+
+# Integration tests need a real apiserver (envtest). Not part of `make verify`
+# so unit CI stays fast; the `integration` GitHub Actions job runs this.
+# Pin GOTOOLCHAIN=local so resolving setup-envtest / envtest does not pull a
+# newer Go toolchain than go.mod allows.
+.PHONY: integration-test
+integration-test: setup-envtest
+	KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+		GOTOOLCHAIN=local $(GO) test ./pkg/... -tags=integration -count=1 -timeout=10m
+
 .PHONY: vet
 vet:
 	$(GO) vet ./...

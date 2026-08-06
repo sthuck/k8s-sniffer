@@ -18,3 +18,4 @@ Planning documents live in [`../docs`](../docs): [ARCHITECTURE.md](../docs/ARCHI
 | [S2-in-process-hub.md](./S2-in-process-hub.md) | T1.8 | In-process Hub: CreateSession/StopSession, event stream, agent assignments |
 | [S2-agent-capture.md](./S2-agent-capture.md) | T1.9–T1.12 | Agent bootstrap, CRI netns resolve, tcpdump, frame ingest |
 | [S2-cli-sink.md](./S2-cli-sink.md) | T1.13–T1.17, T-TEST.1 | PCAP sink, `capture` CLI, agent image, RBAC, kind e2e harness |
+| [S2-envtest-hub.md](./S2-envtest-hub.md) | T-TEST.3 | envtest IT1.1: CreateSession/StopSession agent pod lifecycle |

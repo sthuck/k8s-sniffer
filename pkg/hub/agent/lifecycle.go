@@ -284,7 +284,10 @@ func (m *Manager) DeleteSessionAgents(ctx context.Context, sessionID string) err
 	if err != nil {
 		return err
 	}
-	grace := int64(5)
+	// Ephemeral agents: delete immediately (grace 0). Matches S2-agent-lifecycle
+	// and lets envtest (no kubelet) remove pod objects instead of leaving them
+	// Terminating forever.
+	grace := int64(0)
 	propagation := metav1.DeletePropagationBackground
 	deleteOpts := metav1.DeleteOptions{
 		GracePeriodSeconds: &grace,
