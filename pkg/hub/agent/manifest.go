@@ -8,7 +8,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	snifferagent "github.com/sthuck/k8s-sniffer/pkg/agent"
 	"github.com/sthuck/k8s-sniffer/pkg/capture"
+)
+
+// Agent runtime environment variable names re-exported from pkg/agent for pod manifests.
+const (
+	envSessionID = snifferagent.EnvSessionID
+	envNode      = snifferagent.EnvNode
+	envAgentPod  = snifferagent.EnvAgentPod
+	envHubAddr   = snifferagent.EnvHubAddr
+	envCRISocket = snifferagent.EnvCRISocket
+	envLogLevel  = snifferagent.EnvLogLevel
 )
 
 const (
@@ -54,6 +65,9 @@ func PodManifest(sessionID, nodeName string, cfg capture.AgentConfig, activeDead
 	if nodeName == "" {
 		return nil, fmt.Errorf("node name: required")
 	}
+	if cfg.HubIngestAddr == "" {
+		return nil, fmt.Errorf("agent hub ingest address: required")
+	}
 
 	securityContext := agentSecurityContext(cfg)
 	pullPolicy := corev1.PullIfNotPresent
@@ -61,6 +75,22 @@ func PodManifest(sessionID, nodeName string, cfg capture.AgentConfig, activeDead
 		pullPolicy = corev1.PullAlways
 	}
 	automountToken := false
+
+	env := []corev1.EnvVar{
+		{Name: envSessionID, Value: sessionID},
+		{Name: envNode, Value: nodeName},
+		{Name: envHubAddr, Value: cfg.HubIngestAddr},
+		{Name: envCRISocket, Value: cfg.CRISocketHostPath},
+		{
+			Name: envAgentPod,
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+			},
+		},
+	}
+	if cfg.LogLevel != "" {
+		env = append(env, corev1.EnvVar{Name: envLogLevel, Value: cfg.LogLevel})
+	}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -83,6 +113,7 @@ func PodManifest(sessionID, nodeName string, cfg capture.AgentConfig, activeDead
 					Image:           cfg.Image,
 					ImagePullPolicy: pullPolicy,
 					SecurityContext: securityContext,
+					Env:             env,
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							Name:      CRISocketVolumeName,

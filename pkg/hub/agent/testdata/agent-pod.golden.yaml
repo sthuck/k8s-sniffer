@@ -9,7 +9,20 @@ metadata:
 spec:
   automountServiceAccountToken: false
   containers:
-  - image: example.com/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - env:
+    - name: K8S_SNIFFER_SESSION_ID
+      value: sess-abc123
+    - name: K8S_SNIFFER_NODE
+      value: node-a
+    - name: K8S_SNIFFER_HUB_ADDR
+      value: 127.0.0.1:50051
+    - name: K8S_SNIFFER_CRI_SOCKET
+      value: /run/containerd/containerd.sock
+    - name: K8S_SNIFFER_AGENT_POD
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.name
+    image: example.com/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000
     imagePullPolicy: IfNotPresent
     name: agent
     resources: {}

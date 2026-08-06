@@ -32,7 +32,9 @@ k8s-sniffer --log-level=debug ...
 k8s-sniffer-agent --log-level=debug ...
 ```
 
-**Agent pods:** the hub does not yet inject log level into agent container env (T1.9 agent bootstrap). Until then, set `K8S_SNIFFER_LOG_LEVEL` on the pod spec manually if you need debug logs from a running agent.
+**Agent pods:** when `capture.AgentConfig.LogLevel` is set, the hub injects
+`K8S_SNIFFER_LOG_LEVEL` into the agent container env. Otherwise the agent
+defaults to info (or pass `--log-level` when running the binary locally).
 
 ### JSON output
 

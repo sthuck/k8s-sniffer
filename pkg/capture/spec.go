@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sthuck/k8s-sniffer/pkg/log"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
@@ -241,6 +242,12 @@ type AgentConfig struct {
 	// AllowMutableImage permits a tag-based image reference. Development and
 	// e2e flows (which load a locally built image into kind) set it explicitly.
 	AllowMutableImage bool
+	// HubIngestAddr is the gRPC dial target agents use for AgentIngestService
+	// (host:port, no scheme). Required when scheduling agent pods.
+	HubIngestAddr string
+	// LogLevel is injected into agent pods as K8S_SNIFFER_LOG_LEVEL when set
+	// (info or debug). Empty leaves the agent default (info).
+	LogLevel string
 }
 
 // Privileged reports whether the agent container should run privileged.
@@ -308,6 +315,16 @@ func (c AgentConfig) validate() []error {
 		errs = append(errs, fmt.Errorf("agent cri socket host path: %q is a URI, want an absolute node path such as %s", c.CRISocketHostPath, DefaultCRISocketPath))
 	} else if !filepath.IsAbs(c.CRISocketHostPath) {
 		errs = append(errs, fmt.Errorf("agent cri socket host path: %q must be absolute", c.CRISocketHostPath))
+	}
+
+	if c.HubIngestAddr == "" {
+		errs = append(errs, errors.New("agent hub ingest address: required"))
+	}
+
+	if c.LogLevel != "" {
+		if _, err := log.ParseLevel(c.LogLevel); err != nil {
+			errs = append(errs, fmt.Errorf("agent log level: %w", err))
+		}
 	}
 
 	return errs

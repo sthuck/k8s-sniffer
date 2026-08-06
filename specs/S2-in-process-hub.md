@@ -62,7 +62,7 @@ func (h *Hub) StopAll(ctx context.Context) error
 | `WatchEvents` | Replay buffer + live fan-out; closes on session stop |
 | `SubscribePackets` | Blocks until session stop (fan-out in T1.12) |
 | `WatchTargets` | Sends initial `AgentAssignment`, blocks until stop |
-| `StreamCapture` | Accepts batches, returns summary on EOF (fan-out in T1.12) |
+| `StreamCapture` | Ingests `CaptureBatch`es; fans wire frames to `SubscribePackets` (T1.12) |
 | `ReportStatus` | No-op ack |
 
 ## 5. Notes for T1.9+

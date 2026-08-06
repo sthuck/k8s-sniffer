@@ -16,3 +16,4 @@ Planning documents live in [`../docs`](../docs): [ARCHITECTURE.md](../docs/ARCHI
 | [S2-agent-manifest.md](./S2-agent-manifest.md) | T1.6 | Privileged agent Pod manifest, labels, CRI socket volume |
 | [S2-agent-lifecycle.md](./S2-agent-lifecycle.md) | T1.7 | Create/wait/delete session-scoped agent pods |
 | [S2-in-process-hub.md](./S2-in-process-hub.md) | T1.8 | In-process Hub: CreateSession/StopSession, event stream, agent assignments |
+| [S2-agent-capture.md](./S2-agent-capture.md) | T1.9–T1.12 | Agent bootstrap, CRI netns, tcpdump, frame stream to hub |

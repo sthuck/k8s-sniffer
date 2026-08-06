@@ -19,6 +19,7 @@ func validSpec() Spec {
 func validAgentConfig() AgentConfig {
 	cfg := DefaultAgentConfig()
 	cfg.Image = testImage
+	cfg.HubIngestAddr = "127.0.0.1:50051"
 	return cfg
 }
 
@@ -287,6 +288,16 @@ func TestAgentConfigValidate(t *testing.T) {
 			name:    "cri socket not absolute",
 			mutate:  func(c *AgentConfig) { c.CRISocketHostPath = "run/containerd/containerd.sock" },
 			wantErr: "must be absolute",
+		},
+		{
+			name:    "missing hub ingest address",
+			mutate:  func(c *AgentConfig) { c.HubIngestAddr = "" },
+			wantErr: "agent hub ingest address: required",
+		},
+		{
+			name:    "invalid log level",
+			mutate:  func(c *AgentConfig) { c.LogLevel = "trace" },
+			wantErr: "agent log level",
 		},
 	}
 
