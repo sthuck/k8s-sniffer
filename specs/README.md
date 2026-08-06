@@ -9,7 +9,8 @@ Planning documents live in [`../docs`](../docs): [ARCHITECTURE.md](../docs/ARCHI
 
 | Spec | Tasks | Summary |
 |------|-------|---------|
-| [S0-ci-verify.md](./S0-ci-verify.md) | pre–T-TEST.2 | PR/`main` `unit` job runs `make verify`; pinned `PROTOC_VERSION` |
+| [S0-ci-verify.md](./S0-ci-verify.md) | pre–T-TEST.2 | Interim `unit`/`make verify` gate (superseded by S2-ci-e2e) |
+| [S2-ci-e2e.md](./S2-ci-e2e.md) | T-TEST.2, T-TEST.7 | CI unit + integration + e2e-kind; failure artifact upload |
 | [S1-skeleton-and-api.md](./S1-skeleton-and-api.md) | T1.1, T1.3, T1.2 (+ T0.3 in code) | Go module & package layout, `capture.Spec` + validation, `sniffer.v1` protobuf/gRPC contract |
 | [S2-pod-matcher.md](./S2-pod-matcher.md) | T1.4 | Pod name regex matcher, Running-only filter, `PodRef` mapping |
 | [S2-node-grouping.md](./S2-node-grouping.md) | T1.5 | Map matched pods to `nodeName`; skip unscheduled pods with events |

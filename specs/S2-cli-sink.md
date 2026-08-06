@@ -100,4 +100,4 @@ non-empty, asserts agent pods deleted after stop.
 | `pkg/sink/pcap_test.go` | UT1.5 PCAP round-trip |
 | `test/e2e/smoke_test.go` | E2E1.1 (requires kind) |
 
-Full `integration` / `e2e-kind` CI jobs remain **T-TEST.2**.
+CI jobs and failure artifacts: [S2-ci-e2e.md](./S2-ci-e2e.md) (T-TEST.2 / T-TEST.7).

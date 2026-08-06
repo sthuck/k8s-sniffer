@@ -1,6 +1,4 @@
-# Interim CI gate (pre–T-TEST.2): the `unit` job runs `make verify`
-# (proto-check + vet + go test ./...). Integration and e2e-kind jobs land
-# with T-TEST.2 / T1.17 as separate jobs in this workflow.
+# T-TEST.2 / T-TEST.7: unit + integration (envtest) + kind e2e, with failure artifacts.
 name: verify
 
 on:
@@ -40,3 +38,53 @@ jobs:
 
       - name: Verify
         run: make verify
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Integration (envtest IT1.1)
+        run: make integration-test
+
+  e2e-kind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install kind
+        run: |
+          set -euo pipefail
+          KIND_VERSION=v0.24.0
+          curl -fsSL -o /usr/local/bin/kind \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          chmod +x /usr/local/bin/kind
+          kind version
+          kubectl version --client
+
+      - name: Kind e2e (E2E1.1)
+        env:
+          K8S_SNIFFER_E2E_ARTIFACT_DIR: ${{ github.workspace }}/test/e2e/artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p "$K8S_SNIFFER_E2E_ARTIFACT_DIR"
+          ./test/e2e/run.sh
+
+      - name: Upload e2e failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-kind-artifacts-${{ github.run_id }}
+          path: test/e2e/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7

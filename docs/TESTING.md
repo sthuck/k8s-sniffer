@@ -72,13 +72,13 @@ CI shape (evolve over phases):
 
 | Job | When | Command | Status |
 |-----|------|---------|--------|
-| `unit` | every PR + push to `main` | `make verify` (proto-check, vet, `go test ./...`) | Live in [`.github/workflows/verify.yml`](../.github/workflows/verify.yml) (pre–T-TEST.2 slice) |
-| `integration` | every PR | `make integration-test` (envtest IT1.1) | Test ready (T-TEST.3); CI job lands with T-TEST.2 |
-| `e2e-kind` | every PR after T1.17 | `./test/e2e/run.sh kind` | Planned (T-TEST.2) |
+| `unit` | every PR + push to `main` | `make verify` (proto-check, vet, `go test ./...`) | Live in [`.github/workflows/verify.yml`](../.github/workflows/verify.yml) |
+| `integration` | every PR | `make integration-test` (envtest IT1.1) | Live (T-TEST.2 / T-TEST.3) |
+| `e2e-kind` | every PR | `./test/e2e/run.sh` (E2E1.1); uploads artifacts on failure | Live (T-TEST.2 / T-TEST.7) |
 | `e2e-kind-tls` | every PR after T3.9 (or nightly if flaky) | `./test/e2e/run.sh kind -tags e2e_tls` | Planned |
 | `e2e-k3s` | nightly / manual | `./test/e2e/run.sh k3s` | Planned |
 
-The interim workflow uses a single `unit` job so `integration` / `e2e-kind` can land as sibling jobs under T-TEST.2 without redesigning the gate. CI installs `protoc` at `PROTOC_VERSION` from the Makefile (same pin as local regen).
+CI installs `protoc` at `PROTOC_VERSION` from the Makefile (same pin as local regen). Kind is pinned to v0.24.0 in the workflow.
 
 ---
 

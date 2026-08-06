@@ -5,6 +5,8 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -49,6 +52,18 @@ func TestE2E1_1_SmokeCapture(t *testing.T) {
 	waitForDeployments(t, client, "e2e-fixtures", "http-echo-a", "http-echo-b")
 
 	outPath := filepath.Join(t.TempDir(), "capture.pcapng")
+	if dir := os.Getenv("K8S_SNIFFER_E2E_ARTIFACT_DIR"); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("artifact dir: %v", err)
+		}
+		outPath = filepath.Join(dir, "capture.pcapng")
+		t.Cleanup(func() {
+			if !t.Failed() {
+				return
+			}
+			dumpAgentLogs(t, client, dir)
+		})
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
@@ -184,4 +199,32 @@ func assertNoSessionAgents(t *testing.T, client kubernetes.Interface) {
 	if len(pods.Items) > 0 {
 		t.Fatalf("expected no agent pods after session stop, found %d", len(pods.Items))
 	}
+}
+
+func dumpAgentLogs(t *testing.T, client kubernetes.Interface, dir string) {
+	t.Helper()
+	pods, err := client.CoreV1().Pods(capture.DefaultAgentNamespace).List(context.Background(), metav1.ListOptions{
+		LabelSelector: "app=k8s-sniffer-agent",
+	})
+	if err != nil {
+		_ = os.WriteFile(filepath.Join(dir, "agent-logs-error.txt"), []byte(err.Error()), 0o644)
+		return
+	}
+	var buf bytes.Buffer
+	if len(pods.Items) == 0 {
+		buf.WriteString("(no agent pods at failure time)\n")
+	}
+	for _, pod := range pods.Items {
+		fmt.Fprintf(&buf, "=== %s/%s phase=%s ===\n", pod.Namespace, pod.Name, pod.Status.Phase)
+		req := client.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{})
+		stream, err := req.Stream(context.Background())
+		if err != nil {
+			fmt.Fprintf(&buf, "logs error: %v\n", err)
+			continue
+		}
+		_, _ = io.Copy(&buf, stream)
+		_ = stream.Close()
+		buf.WriteByte('\n')
+	}
+	_ = os.WriteFile(filepath.Join(dir, "agent-logs.txt"), buf.Bytes(), 0o644)
 }
