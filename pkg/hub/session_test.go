@@ -51,15 +51,32 @@ func TestAssignmentForRequiresPodAndStream(t *testing.T) {
 
 func TestClaimCaptureStreamRejectsConcurrentStream(t *testing.T) {
 	sess, _ := testCaptureSession()
-	if err := sess.claimCaptureStream("node-a", "stream-a"); err != nil {
+	if err := sess.claimCaptureStream("node-a", "agent-a", "stream-a"); err != nil {
 		t.Fatalf("claimCaptureStream: %v", err)
 	}
-	if err := sess.claimCaptureStream("node-a", "stream-a"); err == nil {
+	if err := sess.claimCaptureStream("node-a", "agent-a", "stream-a"); err == nil {
 		t.Fatal("expected concurrent capture stream to be rejected")
 	}
 	sess.releaseCaptureStream("node-a", "stream-a")
-	if err := sess.claimCaptureStream("node-a", "stream-a"); err != nil {
+	if err := sess.claimCaptureStream("node-a", "agent-a", "stream-a"); err != nil {
 		t.Fatalf("claim after release: %v", err)
+	}
+}
+
+func TestSequenceAdvancesOnlyAfterRecordCommit(t *testing.T) {
+	sess, batch := testCaptureSession()
+	sess.setState(snifferv1.SessionState_SESSION_STATE_RUNNING, "")
+	if err := sess.validateCaptureBatch(batch); err != nil {
+		t.Fatalf("first validation: %v", err)
+	}
+	if err := sess.validateCaptureBatch(batch); err != nil {
+		t.Fatalf("validation advanced sequence before publish: %v", err)
+	}
+	if err := sess.commitCaptureRecord("node-a", "stream-a", batch.GetRecords()[0]); err != nil {
+		t.Fatalf("commitCaptureRecord: %v", err)
+	}
+	if err := sess.validateCaptureBatch(batch); err == nil {
+		t.Fatal("expected committed sequence to reject replay")
 	}
 }
 

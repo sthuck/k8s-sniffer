@@ -115,11 +115,11 @@ func (c *fakeHubClient) WatchTargets(context.Context, string, string, string, st
 	return c.assignment, nil
 }
 
-func (c *fakeHubClient) StreamCapture(context.Context) (snifferv1.AgentIngestService_StreamCaptureClient, error) {
+func (c *fakeHubClient) StreamCapture(context.Context, string, string) (snifferv1.AgentIngestService_StreamCaptureClient, error) {
 	return c.stream, nil
 }
 
-func (c *fakeHubClient) ReportStatus(context.Context, *snifferv1.ReportStatusRequest) error {
+func (c *fakeHubClient) ReportStatus(context.Context, *snifferv1.ReportStatusRequest, string) error {
 	return nil
 }
 

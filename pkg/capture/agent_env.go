@@ -10,4 +10,5 @@ const (
 	EnvAgentLogLevel  = "K8S_SNIFFER_LOG_LEVEL"
 
 	AgentStreamMetadataKey = "x-k8s-sniffer-stream-id"
+	AgentPodMetadataKey    = "x-k8s-sniffer-agent-pod"
 )

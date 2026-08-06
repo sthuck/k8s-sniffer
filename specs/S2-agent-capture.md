@@ -27,7 +27,8 @@ Flow:
 
 1. `ConfigFromEnv()` validates configuration.
 2. `hubclient.Dial` connects to `AgentIngestService`.
-3. `WatchTargets` authenticates the pod and receives its `AgentAssignment`.
+3. `WatchTargets` authenticates the pod, then waits for the session to be
+   `RUNNING` and for a packet subscriber before delivering `AgentAssignment`.
 4. `StreamCapture` opens the ingest stream for packet batches.
 
 The agent verifies that assignment session, node, and stream identity match its
@@ -97,12 +98,14 @@ stderr is drained concurrently with a size cap and included in process errors.
 Hub (`pkg/hub/packets.go`):
 
 - `StreamCapture` validates batch `session_id`, `node`, and `stream_id` against
-  the live assignment, permits only one active stream per agent incarnation,
-  bounds batch size, and verifies each record's pod.
-- Ingest waits for the first `SubscribePackets` client and applies backpressure
-  through gRPC rather than silently dropping records.
+  authenticated gRPC metadata and the live assignment, permits only one active
+  stream per agent incarnation, bounds batch size, and verifies each record's
+  pod.
+- Capture starts only after `CreateSession` can return and a
+  `SubscribePackets` client is attached. Subsequent slow consumers apply
+  backpressure through gRPC rather than silently dropping records.
 - Session stop accepts in-flight batches while agents receive a short graceful
-  termination window, then closes packet subscribers after agents are gone.
+  termination window, then drains buffered records before closing subscribers.
 - Sequence numbers are monotonic across every target in one agent incarnation.
 - Per-target failures are emitted through `ReportStatus` as structured events.
 - Returns `StreamCaptureSummary.records_accepted`.

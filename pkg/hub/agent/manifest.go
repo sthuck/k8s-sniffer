@@ -159,4 +159,22 @@ func agentSecurityContext(cfg capture.AgentConfig) *corev1.SecurityContext {
 	}
 }
 
+func StreamIDFromPod(pod *corev1.Pod) (string, error) {
+	if pod == nil {
+		return "", fmt.Errorf("agent pod: required")
+	}
+	for _, container := range pod.Spec.Containers {
+		if container.Name != AgentContainerName {
+			continue
+		}
+		for _, env := range container.Env {
+			if env.Name == envStreamID && env.Value != "" {
+				return env.Value, nil
+			}
+		}
+		return "", fmt.Errorf("agent pod %q has no stream id", pod.Name)
+	}
+	return "", fmt.Errorf("agent pod %q has no %q container", pod.Name, AgentContainerName)
+}
+
 func hostPathType(t corev1.HostPathType) *corev1.HostPathType { return &t }

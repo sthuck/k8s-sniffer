@@ -118,6 +118,9 @@ func (m *Manager) AgentOnNode(ctx context.Context, sessionID, nodeName string) (
 // CreateForNode builds and creates an agent pod on nodeName for sessionID. If an
 // agent for the same session and node already exists it is returned (idempotent).
 func (m *Manager) CreateForNode(ctx context.Context, sessionID, nodeName string, opts CreateOptions) (*corev1.Pod, error) {
+	if opts.StreamID == "" {
+		return nil, fmt.Errorf("stream id: required")
+	}
 	if existing, ok, err := m.AgentOnNode(ctx, sessionID, nodeName); err != nil {
 		return nil, err
 	} else if ok {

@@ -35,6 +35,7 @@ type sessionState struct {
 	stopOnce    sync.Once
 	agents      map[string]agentRecord
 	assigns     map[string]*snifferv1.AgentAssignment
+	stateChange chan struct{}
 }
 
 func newSessionState(id string, spec *snifferv1.CaptureSpec) *sessionState {
@@ -46,12 +47,13 @@ func newSessionState(id string, spec *snifferv1.CaptureSpec) *sessionState {
 			State:     snifferv1.SessionState_SESSION_STATE_PENDING,
 			CreatedAt: timestamppb.Now(),
 		},
-		events:  newEventLog(),
-		packets: newPacketLog(),
-		ctx:     ctx,
-		cancel:  cancel,
-		agents:  make(map[string]agentRecord),
-		assigns: make(map[string]*snifferv1.AgentAssignment),
+		events:      newEventLog(),
+		packets:     newPacketLog(),
+		ctx:         ctx,
+		cancel:      cancel,
+		agents:      make(map[string]agentRecord),
+		assigns:     make(map[string]*snifferv1.AgentAssignment),
+		stateChange: make(chan struct{}),
 	}
 }
 
@@ -72,8 +74,32 @@ func (s *sessionState) setState(state snifferv1.SessionState, failureReason stri
 	defer s.mu.Unlock()
 	s.proto.State = state
 	s.proto.FailureReason = failureReason
+	close(s.stateChange)
+	s.stateChange = make(chan struct{})
 	if state == snifferv1.SessionState_SESSION_STATE_STOPPED || state == snifferv1.SessionState_SESSION_STATE_FAILED {
 		s.proto.StoppedAt = timestamppb.Now()
+	}
+}
+
+func (s *sessionState) waitUntilRunning(ctx context.Context) error {
+	for {
+		s.mu.RLock()
+		state := s.proto.State
+		changed := s.stateChange
+		s.mu.RUnlock()
+		switch state {
+		case snifferv1.SessionState_SESSION_STATE_RUNNING:
+			return nil
+		case snifferv1.SessionState_SESSION_STATE_STOPPING,
+			snifferv1.SessionState_SESSION_STATE_STOPPED,
+			snifferv1.SessionState_SESSION_STATE_FAILED:
+			return fmt.Errorf("session entered state %s before capture started", state)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
 	}
 }
 
@@ -135,8 +161,8 @@ func (s *sessionState) assignmentFor(node, podName, streamID string) (*snifferv1
 }
 
 func (s *sessionState) validateCaptureBatch(batch *snifferv1.CaptureBatch) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if batch.GetSessionId() == "" || batch.GetSessionId() != s.proto.Id {
 		return fmt.Errorf("session_id mismatch")
 	}
@@ -176,12 +202,29 @@ func (s *sessionState) validateCaptureBatch(batch *snifferv1.CaptureBatch) error
 			return fmt.Errorf("payload bytes exceed %d", maxBatchPayloadBytes)
 		}
 	}
-	rec.lastSequence = lastSequence
-	s.agents[batch.GetNode()] = rec
 	return nil
 }
 
-func (s *sessionState) validateAgentEnvelope(sessionID, node, streamID string) error {
+func (s *sessionState) commitCaptureRecord(node, streamID string, record *snifferv1.CaptureRecord) error {
+	frame := record.GetWireFrame()
+	if frame == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.agents[node]
+	if !ok || rec.streamID != streamID {
+		return fmt.Errorf("agent identity mismatch")
+	}
+	if frame.GetSequence() != rec.lastSequence+1 {
+		return fmt.Errorf("sequence %d, want %d", frame.GetSequence(), rec.lastSequence+1)
+	}
+	rec.lastSequence = frame.GetSequence()
+	s.agents[node] = rec
+	return nil
+}
+
+func (s *sessionState) validateAgentEnvelope(sessionID, node, podName, streamID string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if sessionID == "" || sessionID != s.proto.Id {
@@ -191,17 +234,17 @@ func (s *sessionState) validateAgentEnvelope(sessionID, node, streamID string) e
 	if !ok {
 		return fmt.Errorf("no agent for node %q", node)
 	}
-	if streamID == "" || streamID != rec.streamID {
-		return fmt.Errorf("stream_id mismatch")
+	if podName == "" || podName != rec.podName || streamID == "" || streamID != rec.streamID {
+		return fmt.Errorf("agent identity mismatch")
 	}
 	return nil
 }
 
-func (s *sessionState) claimCaptureStream(node, streamID string) error {
+func (s *sessionState) claimCaptureStream(node, podName, streamID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec, ok := s.agents[node]
-	if !ok || streamID == "" || streamID != rec.streamID {
+	if !ok || podName == "" || podName != rec.podName || streamID == "" || streamID != rec.streamID {
 		return fmt.Errorf("agent identity mismatch")
 	}
 	if rec.ingestActive {

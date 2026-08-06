@@ -34,8 +34,8 @@ type Capturer interface {
 
 type HubClient interface {
 	WatchTargets(context.Context, string, string, string, string) (*snifferv1.AgentAssignment, error)
-	StreamCapture(context.Context) (snifferv1.AgentIngestService_StreamCaptureClient, error)
-	ReportStatus(context.Context, *snifferv1.ReportStatusRequest) error
+	StreamCapture(context.Context, string, string) (snifferv1.AgentIngestService_StreamCaptureClient, error)
+	ReportStatus(context.Context, *snifferv1.ReportStatusRequest, string) error
 	Close() error
 }
 
@@ -87,7 +87,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		slog.Int("targets", len(assignment.GetTargets())),
 	)
 
-	stream, err := client.StreamCapture(runCtx)
+	stream, err := client.StreamCapture(runCtx, cfg.AgentPod, cfg.StreamID)
 	if err != nil {
 		return err
 	}
@@ -109,7 +109,9 @@ func (r *Runner) Run(ctx context.Context) error {
 				!errors.Is(err, context.Canceled) {
 				targetErr := fmt.Errorf("target %s/%s: %w", target.GetPod().GetNamespace(), target.GetPod().GetName(), err)
 				captureErrs <- targetErr
-				r.reportCaptureError(runCtx, client, assignment, cfg.AgentPod, target, err)
+				if ctx.Err() == nil {
+					r.reportCaptureError(context.WithoutCancel(ctx), client, assignment, cfg.AgentPod, target, err)
+				}
 			}
 		}()
 	}
@@ -327,7 +329,7 @@ func (r *Runner) reportCaptureError(
 				StreamId:  assignment.GetStreamId(),
 			},
 		},
-	})
+	}, agentPod)
 	if reportErr != nil && ctx.Err() == nil {
 		agentLog.Info("capture error report failed",
 			slog.String("session_id", assignment.GetSessionId()),

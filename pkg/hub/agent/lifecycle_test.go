@@ -95,12 +95,24 @@ func TestCreateForNodeIdempotentPerNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first CreateForNode: %v", err)
 	}
-	second, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", testCreateOptions)
+	second, err := mgr.CreateForNode(
+		context.Background(),
+		"sess-1",
+		"node-a",
+		CreateOptions{StreamID: "stream-2"},
+	)
 	if err != nil {
 		t.Fatalf("second CreateForNode: %v", err)
 	}
 	if second.Name != first.Name {
 		t.Fatalf("duplicate create returned %q, want %q", second.Name, first.Name)
+	}
+	streamID, err := StreamIDFromPod(second)
+	if err != nil {
+		t.Fatalf("StreamIDFromPod: %v", err)
+	}
+	if streamID != testCreateOptions.StreamID {
+		t.Fatalf("reused stream id = %q, want %q", streamID, testCreateOptions.StreamID)
 	}
 	agents, err := mgr.ListSessionAgents(context.Background(), "sess-1")
 	if err != nil {

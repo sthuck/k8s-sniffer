@@ -223,7 +223,11 @@ func TestWatchTargetsDeliversAssignment(t *testing.T) {
 	}
 	node := created.GetSession().GetNodes()[0]
 	agentPod, streamID := sessionAgentIdentity(t, client, created.GetSession().GetId(), node)
-	ctx = metadata.AppendToOutgoingContext(ctx, capture.AgentStreamMetadataKey, streamID)
+	ctx = metadata.AppendToOutgoingContext(
+		ctx,
+		capture.AgentStreamMetadataKey, streamID,
+		capture.AgentPodMetadataKey, agentPod,
+	)
 
 	stream, err := ingestClient.WatchTargets(ctx, &snifferv1.WatchTargetsRequest{
 		SessionId: created.GetSession().GetId(),
@@ -233,10 +237,37 @@ func TestWatchTargetsDeliversAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WatchTargets: %v", err)
 	}
-	assignment, err := stream.Recv()
-	if err != nil {
-		t.Fatalf("Recv assignment: %v", err)
+	type assignmentResult struct {
+		assignment *snifferv1.AgentAssignment
+		err        error
 	}
+	received := make(chan assignmentResult, 1)
+	go func() {
+		assignment, err := stream.Recv()
+		received <- assignmentResult{assignment: assignment, err: err}
+	}()
+	select {
+	case result := <-received:
+		t.Fatalf("assignment arrived before packet subscriber: %+v, %v", result.assignment, result.err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	packets, err := hubClient.SubscribePackets(ctx, &snifferv1.SubscribePacketsRequest{
+		SessionId: created.GetSession().GetId(),
+	})
+	if err != nil {
+		t.Fatalf("SubscribePackets: %v", err)
+	}
+	go func() { _, _ = packets.Recv() }()
+	var result assignmentResult
+	select {
+	case result = <-received:
+	case <-time.After(time.Second):
+		t.Fatal("assignment did not arrive after packet subscriber attached")
+	}
+	if result.err != nil {
+		t.Fatalf("Recv assignment: %v", result.err)
+	}
+	assignment := result.assignment
 	if assignment.GetSessionId() != created.GetSession().GetId() {
 		t.Fatalf("session id = %q", assignment.GetSessionId())
 	}
@@ -273,13 +304,18 @@ func TestStreamCaptureDeliversAssignedPacket(t *testing.T) {
 	}
 	session := created.GetSession()
 	node := session.GetNodes()[0]
-	_, streamID := sessionAgentIdentity(t, client, session.GetId(), node)
+	agentPod, streamID := sessionAgentIdentity(t, client, session.GetId(), node)
 
 	packets, err := hubClient.SubscribePackets(ctx, &snifferv1.SubscribePacketsRequest{SessionId: session.GetId()})
 	if err != nil {
 		t.Fatalf("SubscribePackets: %v", err)
 	}
-	ingest, err := ingestClient.StreamCapture(ctx)
+	ingestCtx := metadata.AppendToOutgoingContext(
+		ctx,
+		capture.AgentStreamMetadataKey, streamID,
+		capture.AgentPodMetadataKey, agentPod,
+	)
+	ingest, err := ingestClient.StreamCapture(ingestCtx)
 	if err != nil {
 		t.Fatalf("StreamCapture: %v", err)
 	}
