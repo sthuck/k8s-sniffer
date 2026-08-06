@@ -15,6 +15,8 @@ import (
 	"github.com/sthuck/k8s-sniffer/pkg/capture"
 )
 
+var testCreateOptions = CreateOptions{StreamID: "stream-1"}
+
 const lifecycleTestImage = "example.com/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 func testAgentConfig() capture.AgentConfig {
@@ -53,7 +55,7 @@ func TestManagerCreateForNode(t *testing.T) {
 	client := newTestClient()
 	mgr := NewManager(client, testAgentConfig())
 
-	pod, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", CreateOptions{})
+	pod, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", testCreateOptions)
 	if err != nil {
 		t.Fatalf("CreateForNode: %v", err)
 	}
@@ -89,16 +91,28 @@ func TestCreateForNodeIdempotentPerNode(t *testing.T) {
 	client := newTestClient()
 	mgr := NewManager(client, testAgentConfig())
 
-	first, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", CreateOptions{})
+	first, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", testCreateOptions)
 	if err != nil {
 		t.Fatalf("first CreateForNode: %v", err)
 	}
-	second, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", CreateOptions{})
+	second, err := mgr.CreateForNode(
+		context.Background(),
+		"sess-1",
+		"node-a",
+		CreateOptions{StreamID: "stream-2"},
+	)
 	if err != nil {
 		t.Fatalf("second CreateForNode: %v", err)
 	}
 	if second.Name != first.Name {
 		t.Fatalf("duplicate create returned %q, want %q", second.Name, first.Name)
+	}
+	streamID, err := StreamIDFromPod(second)
+	if err != nil {
+		t.Fatalf("StreamIDFromPod: %v", err)
+	}
+	if streamID != testCreateOptions.StreamID {
+		t.Fatalf("reused stream id = %q, want %q", streamID, testCreateOptions.StreamID)
 	}
 	agents, err := mgr.ListSessionAgents(context.Background(), "sess-1")
 	if err != nil {
@@ -113,7 +127,7 @@ func TestManagerWaitReady(t *testing.T) {
 	client := newTestClient()
 	mgr := NewManager(client, testAgentConfig()).WithReadyTimeout(5 * time.Second)
 
-	pod, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", CreateOptions{})
+	pod, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", testCreateOptions)
 	if err != nil {
 		t.Fatalf("CreateForNode: %v", err)
 	}
@@ -142,7 +156,7 @@ func TestWaitReadyFailsOnImagePullBackOff(t *testing.T) {
 	client := newTestClient()
 	mgr := NewManager(client, testAgentConfig()).WithReadyTimeout(2 * time.Second)
 
-	pod, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", CreateOptions{})
+	pod, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", testCreateOptions)
 	if err != nil {
 		t.Fatalf("CreateForNode: %v", err)
 	}
@@ -177,7 +191,7 @@ func TestWaitReadyFailsOnTerminalPhase(t *testing.T) {
 	client := newTestClient()
 	mgr := NewManager(client, testAgentConfig()).WithReadyTimeout(2 * time.Second)
 
-	pod, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", CreateOptions{})
+	pod, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", testCreateOptions)
 	if err != nil {
 		t.Fatalf("CreateForNode: %v", err)
 	}
@@ -203,7 +217,7 @@ func TestManagerDeleteSessionAgents(t *testing.T) {
 	mgr := NewManager(client, testAgentConfig())
 
 	for _, node := range []string{"node-a", "node-b"} {
-		if _, err := mgr.CreateForNode(context.Background(), "sess-1", node, CreateOptions{}); err != nil {
+		if _, err := mgr.CreateForNode(context.Background(), "sess-1", node, testCreateOptions); err != nil {
 			t.Fatalf("CreateForNode(%s): %v", node, err)
 		}
 	}

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -58,9 +59,9 @@ func main() {
 	runner := agent.NewRunner(agent.RunnerOptions{
 		Config:   cfg,
 		Resolver: resolver,
-		Tcpdump:  capture.Tcpdump{},
+		Tcpdump:  &capture.Tcpdump{},
 	})
-	if err := runner.Run(ctx); err != nil && err != context.Canceled {
+	if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		cliLog.Info("agent exited with error", slog.String("err", err.Error()))
 		os.Exit(1)
 	}

@@ -242,13 +242,42 @@ TLS plaintext can be emitted as:
 
 Keep formats boring and tool-friendly.
 
-### 7.2 Client sinks
+### 7.2 Capture start and delivery guarantees
+
+Agent Pod readiness is not the same as capture readiness. A session reaches
+`RUNNING` after its scheduled agents are Ready, but the Hub withholds each
+agent's target assignment until at least one `SubscribePackets` client is
+attached. Receiving that assignment is the agent's signal to resolve netns
+targets and start tcpdump.
+
+This ordering is required because `CreateSession` is unary: a client cannot
+subscribe until it receives the new session ID. Starting tcpdump earlier would
+either lose the initial records or back up the capture pipeline behind a sink
+that cannot exist yet.
+
+Delivery invariants:
+
+- Capture starts only after the session is `RUNNING` and a packet subscriber is
+  attached.
+- The Hub does not silently drop records for missing or slow subscribers.
+  Subscriber queues apply backpressure to agent ingest.
+- If every subscriber disconnects, ingest waits for a replacement subscriber.
+  Prolonged backpressure can still cause kernel/tcpdump drops, which must be
+  surfaced through session statistics rather than hidden.
+- Session shutdown stops agents, finishes active publishing, and drains records
+  already queued to subscribers before closing their streams. The drain is
+  bounded so an unresponsive client cannot block teardown indefinitely.
+
+Queue sizes, synchronization primitives, and drain timeout values are
+implementation details recorded in the relevant output spec.
+
+### 7.3 Client sinks
 
 - File (`--out`)
 -Stdout (`--out -`) for piping to Wireshark: `... --out - | wireshark -k -i -`
 - Multiple files when multi-pod metadata needs separation (optional `--split-per-pod`)
 
-### 7.3 Multi-pod PCAP
+### 7.4 Multi-pod PCAP
 
 Prefer **single PCAPng** with Interface Description Blocks or packet comments carrying pod identity, so one Wireshark session can filter `k8s.pod == foo`.
 

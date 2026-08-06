@@ -12,6 +12,7 @@ import (
 )
 
 const testImage = "example.com/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+const testStreamID = "stream-1"
 
 func validAgentConfig() capture.AgentConfig {
 	cfg := capture.DefaultAgentConfig()
@@ -21,7 +22,7 @@ func validAgentConfig() capture.AgentConfig {
 }
 
 func TestPodManifestGolden(t *testing.T) {
-	pod, err := PodManifest("sess-abc123", "node-a", validAgentConfig(), 0)
+	pod, err := PodManifest("sess-abc123", testStreamID, "node-a", validAgentConfig(), 0)
 	if err != nil {
 		t.Fatalf("PodManifest: %v", err)
 	}
@@ -43,10 +44,13 @@ func TestPodManifestGolden(t *testing.T) {
 
 func TestPodManifestRequiresSessionAndNode(t *testing.T) {
 	cfg := validAgentConfig()
-	if _, err := PodManifest("", "node-a", cfg, 0); err == nil {
+	if _, err := PodManifest("", testStreamID, "node-a", cfg, 0); err == nil {
 		t.Fatal("expected error for empty session id")
 	}
-	if _, err := PodManifest("sess-1", "", cfg, 0); err == nil {
+	if _, err := PodManifest("sess-1", "", "node-a", cfg, 0); err == nil {
+		t.Fatal("expected error for empty stream id")
+	}
+	if _, err := PodManifest("sess-1", testStreamID, "", cfg, 0); err == nil {
 		t.Fatal("expected error for empty node name")
 	}
 }
@@ -55,7 +59,7 @@ func TestPodManifestUnprivileged(t *testing.T) {
 	cfg := validAgentConfig()
 	cfg.Unprivileged = true
 
-	pod, err := PodManifest("sess-1", "node-a", cfg, 0)
+	pod, err := PodManifest("sess-1", testStreamID, "node-a", cfg, 0)
 	if err != nil {
 		t.Fatalf("PodManifest: %v", err)
 	}
@@ -73,7 +77,7 @@ func TestPodManifestMutableImagePullPolicy(t *testing.T) {
 	cfg.AllowMutableImage = true
 	cfg.Image = "local/agent:dev"
 
-	pod, err := PodManifest("sess-1", "node-a", cfg, 0)
+	pod, err := PodManifest("sess-1", testStreamID, "node-a", cfg, 0)
 	if err != nil {
 		t.Fatalf("PodManifest: %v", err)
 	}
@@ -83,7 +87,7 @@ func TestPodManifestMutableImagePullPolicy(t *testing.T) {
 }
 
 func TestPodManifestDisablesServiceAccountToken(t *testing.T) {
-	pod, err := PodManifest("sess-1", "node-a", validAgentConfig(), 0)
+	pod, err := PodManifest("sess-1", testStreamID, "node-a", validAgentConfig(), 0)
 	if err != nil {
 		t.Fatalf("PodManifest: %v", err)
 	}
@@ -95,7 +99,7 @@ func TestPodManifestDisablesServiceAccountToken(t *testing.T) {
 func TestPodManifestRequiresHubAddr(t *testing.T) {
 	cfg := validAgentConfig()
 	cfg.HubIngestAddr = ""
-	if _, err := PodManifest("sess-1", "node-a", cfg, 0); err == nil {
+	if _, err := PodManifest("sess-1", testStreamID, "node-a", cfg, 0); err == nil {
 		t.Fatal("expected error for empty hub ingest address")
 	}
 }
@@ -104,7 +108,7 @@ func TestPodManifestInjectsLogLevel(t *testing.T) {
 	cfg := validAgentConfig()
 	cfg.LogLevel = "debug"
 
-	pod, err := PodManifest("sess-1", "node-a", cfg, 0)
+	pod, err := PodManifest("sess-1", testStreamID, "node-a", cfg, 0)
 	if err != nil {
 		t.Fatalf("PodManifest: %v", err)
 	}
@@ -123,7 +127,7 @@ func TestPodManifestInjectsLogLevel(t *testing.T) {
 
 func TestPodManifestValidatesConfig(t *testing.T) {
 	cfg := capture.AgentConfig{}
-	if _, err := PodManifest("sess-1", "node-a", cfg, 0); err == nil {
+	if _, err := PodManifest("sess-1", testStreamID, "node-a", cfg, 0); err == nil {
 		t.Fatal("expected validation error")
 	}
 }

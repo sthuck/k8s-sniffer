@@ -8,18 +8,17 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	snifferagent "github.com/sthuck/k8s-sniffer/pkg/agent"
 	"github.com/sthuck/k8s-sniffer/pkg/capture"
 )
 
-// Agent runtime environment variable names re-exported from pkg/agent for pod manifests.
 const (
-	envSessionID = snifferagent.EnvSessionID
-	envNode      = snifferagent.EnvNode
-	envAgentPod  = snifferagent.EnvAgentPod
-	envHubAddr   = snifferagent.EnvHubAddr
-	envCRISocket = snifferagent.EnvCRISocket
-	envLogLevel  = snifferagent.EnvLogLevel
+	envSessionID = capture.EnvAgentSessionID
+	envNode      = capture.EnvAgentNode
+	envAgentPod  = capture.EnvAgentPod
+	envStreamID  = capture.EnvAgentStreamID
+	envHubAddr   = capture.EnvAgentHubAddr
+	envCRISocket = capture.EnvAgentCRISocket
+	envLogLevel  = capture.EnvAgentLogLevel
 )
 
 const (
@@ -51,16 +50,19 @@ var unprivilegedCapabilities = []corev1.Capability{
 }
 
 // PodManifest returns a Pod spec for a node-local sniffer agent. The caller
-// creates the object in cfg.Namespace. sessionID must be non-empty.
+// creates the object in cfg.Namespace. Session and stream IDs must be non-empty.
 // activeDeadline, when positive, sets spec.activeDeadlineSeconds as a crash-
 // safety backstop when the hub process cannot run StopSession.
-func PodManifest(sessionID, nodeName string, cfg capture.AgentConfig, activeDeadline time.Duration) (*corev1.Pod, error) {
+func PodManifest(sessionID, streamID, nodeName string, cfg capture.AgentConfig, activeDeadline time.Duration) (*corev1.Pod, error) {
 	cfg = cfg.WithDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("agent config: %w", err)
 	}
 	if sessionID == "" {
 		return nil, fmt.Errorf("session id: required")
+	}
+	if streamID == "" {
+		return nil, fmt.Errorf("stream id: required")
 	}
 	if nodeName == "" {
 		return nil, fmt.Errorf("node name: required")
@@ -79,6 +81,7 @@ func PodManifest(sessionID, nodeName string, cfg capture.AgentConfig, activeDead
 	env := []corev1.EnvVar{
 		{Name: envSessionID, Value: sessionID},
 		{Name: envNode, Value: nodeName},
+		{Name: envStreamID, Value: streamID},
 		{Name: envHubAddr, Value: cfg.HubIngestAddr},
 		{Name: envCRISocket, Value: cfg.CRISocketHostPath},
 		{
@@ -154,6 +157,24 @@ func agentSecurityContext(cfg capture.AgentConfig) *corev1.SecurityContext {
 	return &corev1.SecurityContext{
 		Capabilities: &corev1.Capabilities{Add: unprivilegedCapabilities},
 	}
+}
+
+func StreamIDFromPod(pod *corev1.Pod) (string, error) {
+	if pod == nil {
+		return "", fmt.Errorf("agent pod: required")
+	}
+	for _, container := range pod.Spec.Containers {
+		if container.Name != AgentContainerName {
+			continue
+		}
+		for _, env := range container.Env {
+			if env.Name == envStreamID && env.Value != "" {
+				return env.Value, nil
+			}
+		}
+		return "", fmt.Errorf("agent pod %q has no stream id", pod.Name)
+	}
+	return "", fmt.Errorf("agent pod %q has no %q container", pod.Name, AgentContainerName)
 }
 
 func hostPathType(t corev1.HostPathType) *corev1.HostPathType { return &t }

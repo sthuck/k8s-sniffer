@@ -38,6 +38,11 @@ func TestSpecValidate(t *testing.T) {
 			mutate: func(s *Spec) { s.Duration = 5 * time.Minute; s.BPFFilter = "tcp port 8080" },
 		},
 		{
+			name:    "option-like bpf filter",
+			mutate:  func(s *Spec) { s.BPFFilter = "-r /host/file" },
+			wantErr: "bpf filter:",
+		},
+		{
 			name:    "empty namespace",
 			mutate:  func(s *Spec) { s.Namespace = "" },
 			wantErr: "namespace: required",

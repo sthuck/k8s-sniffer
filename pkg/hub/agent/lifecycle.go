@@ -23,6 +23,7 @@ var agentLog = log.WithComponent("agent")
 // DefaultReadyTimeout is how long CreateSession waits for an agent pod to become
 // Ready before failing the session.
 const DefaultReadyTimeout = 2 * time.Minute
+const defaultDeleteTimeout = 30 * time.Second
 
 // Manager creates, watches, and deletes ephemeral agent pods for a session.
 type Manager struct {
@@ -35,6 +36,8 @@ type Manager struct {
 type CreateOptions struct {
 	// ActiveDeadline is a hard pod lifetime when non-zero (from session duration).
 	ActiveDeadline time.Duration
+	// StreamID authenticates this agent incarnation to the ingest service.
+	StreamID string
 }
 
 // NewManager returns a lifecycle manager. cfg is validated on each call via
@@ -115,6 +118,9 @@ func (m *Manager) AgentOnNode(ctx context.Context, sessionID, nodeName string) (
 // CreateForNode builds and creates an agent pod on nodeName for sessionID. If an
 // agent for the same session and node already exists it is returned (idempotent).
 func (m *Manager) CreateForNode(ctx context.Context, sessionID, nodeName string, opts CreateOptions) (*corev1.Pod, error) {
+	if opts.StreamID == "" {
+		return nil, fmt.Errorf("stream id: required")
+	}
 	if existing, ok, err := m.AgentOnNode(ctx, sessionID, nodeName); err != nil {
 		return nil, err
 	} else if ok {
@@ -126,7 +132,7 @@ func (m *Manager) CreateForNode(ctx context.Context, sessionID, nodeName string,
 		return existing, nil
 	}
 
-	pod, err := PodManifest(sessionID, nodeName, m.cfg, opts.ActiveDeadline)
+	pod, err := PodManifest(sessionID, opts.StreamID, nodeName, m.cfg, opts.ActiveDeadline)
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +284,7 @@ func (m *Manager) DeleteSessionAgents(ctx context.Context, sessionID string) err
 	if err != nil {
 		return err
 	}
-	grace := int64(0)
+	grace := int64(5)
 	propagation := metav1.DeletePropagationBackground
 	deleteOpts := metav1.DeleteOptions{
 		GracePeriodSeconds: &grace,
@@ -330,9 +336,27 @@ func (m *Manager) DeleteSessionAgents(ctx context.Context, sessionID string) err
 		)
 		return joinErr
 	}
+	if err := m.waitSessionAgentsGone(ctx, sessionID); err != nil {
+		return err
+	}
 	agentLog.Info("session agents deleted",
 		slog.String("session_id", sessionID),
 		slog.Int("pods", len(pods)),
 	)
 	return nil
+}
+
+func (m *Manager) waitSessionAgentsGone(ctx context.Context, sessionID string) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultDeleteTimeout)
+	defer cancel()
+	return wait.PollUntilContextCancel(ctx, 200*time.Millisecond, true, func(ctx context.Context) (bool, error) {
+		pods, err := m.ListSessionAgents(ctx, sessionID)
+		if err != nil {
+			if isRetriableAPIError(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return len(pods) == 0, nil
+	})
 }

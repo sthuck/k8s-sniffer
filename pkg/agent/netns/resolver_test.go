@@ -103,3 +103,13 @@ func TestWorkloadContainers(t *testing.T) {
 		t.Fatalf("fallback = %v", got)
 	}
 }
+
+func TestTrimRuntimePrefix(t *testing.T) {
+	t.Parallel()
+	if got := trimRuntimePrefix("containerd://abc123"); got != "abc123" {
+		t.Fatalf("trimRuntimePrefix() = %q", got)
+	}
+	if got := trimRuntimePrefix("abc123"); got != "abc123" {
+		t.Fatalf("trimRuntimePrefix() changed plain id to %q", got)
+	}
+}

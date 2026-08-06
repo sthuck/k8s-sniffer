@@ -14,6 +14,8 @@ spec:
       value: sess-abc123
     - name: K8S_SNIFFER_NODE
       value: node-a
+    - name: K8S_SNIFFER_STREAM_ID
+      value: stream-1
     - name: K8S_SNIFFER_HUB_ADDR
       value: 127.0.0.1:50051
     - name: K8S_SNIFFER_CRI_SOCKET

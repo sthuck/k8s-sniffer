@@ -7,8 +7,10 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
+	sharedcapture "github.com/sthuck/k8s-sniffer/pkg/capture"
 )
 
 // Client talks to the hub AgentIngestService.
@@ -39,7 +41,8 @@ func (c *Client) Close() error {
 }
 
 // WatchTargets blocks until the first assignment arrives or ctx is cancelled.
-func (c *Client) WatchTargets(ctx context.Context, sessionID, node, agentPod string) (*snifferv1.AgentAssignment, error) {
+func (c *Client) WatchTargets(ctx context.Context, sessionID, node, agentPod, streamID string) (*snifferv1.AgentAssignment, error) {
+	ctx = withAgentIdentity(ctx, agentPod, streamID)
 	stream, err := c.ingest.WatchTargets(ctx, &snifferv1.WatchTargetsRequest{
 		SessionId: sessionID,
 		Node:      node,
@@ -55,13 +58,30 @@ func (c *Client) WatchTargets(ctx context.Context, sessionID, node, agentPod str
 	return assignment, nil
 }
 
+func (c *Client) ReportStatus(ctx context.Context, req *snifferv1.ReportStatusRequest, agentPod string) error {
+	ctx = withAgentIdentity(ctx, agentPod, req.GetStreamId())
+	if _, err := c.ingest.ReportStatus(ctx, req); err != nil {
+		return fmt.Errorf("report status: %w", err)
+	}
+	return nil
+}
+
 // StreamCapture opens the ingest stream.
-func (c *Client) StreamCapture(ctx context.Context) (snifferv1.AgentIngestService_StreamCaptureClient, error) {
+func (c *Client) StreamCapture(ctx context.Context, agentPod, streamID string) (snifferv1.AgentIngestService_StreamCaptureClient, error) {
+	ctx = withAgentIdentity(ctx, agentPod, streamID)
 	stream, err := c.ingest.StreamCapture(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("stream capture: %w", err)
 	}
 	return stream, nil
+}
+
+func withAgentIdentity(ctx context.Context, agentPod, streamID string) context.Context {
+	return metadata.AppendToOutgoingContext(
+		ctx,
+		sharedcapture.AgentStreamMetadataKey, streamID,
+		sharedcapture.AgentPodMetadataKey, agentPod,
+	)
 }
 
 // SendBatch writes one CaptureBatch to the open stream.
