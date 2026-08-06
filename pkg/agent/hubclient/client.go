@@ -74,9 +74,6 @@ func SendBatch(stream snifferv1.AgentIngestService_StreamCaptureClient, batch *s
 
 // CloseCapture sends EOF and returns the hub summary.
 func CloseCapture(stream snifferv1.AgentIngestService_StreamCaptureClient) (*snifferv1.StreamCaptureSummary, error) {
-	if err := stream.CloseSend(); err != nil {
-		return nil, fmt.Errorf("close capture stream: %w", err)
-	}
 	summary, err := stream.CloseAndRecv()
 	if err != nil && err != io.EOF {
 		return nil, fmt.Errorf("capture summary: %w", err)

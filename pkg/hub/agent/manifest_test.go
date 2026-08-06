@@ -100,6 +100,27 @@ func TestPodManifestRequiresHubAddr(t *testing.T) {
 	}
 }
 
+func TestPodManifestInjectsLogLevel(t *testing.T) {
+	cfg := validAgentConfig()
+	cfg.LogLevel = "debug"
+
+	pod, err := PodManifest("sess-1", "node-a", cfg, 0)
+	if err != nil {
+		t.Fatalf("PodManifest: %v", err)
+	}
+	env := pod.Spec.Containers[0].Env
+	found := false
+	for _, e := range env {
+		if e.Name == envLogLevel && e.Value == "debug" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected K8S_SNIFFER_LOG_LEVEL=debug in pod env")
+	}
+}
+
 func TestPodManifestValidatesConfig(t *testing.T) {
 	cfg := capture.AgentConfig{}
 	if _, err := PodManifest("sess-1", "node-a", cfg, 0); err == nil {

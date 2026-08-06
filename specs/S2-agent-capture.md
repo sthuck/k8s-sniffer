@@ -20,6 +20,7 @@ The agent reads configuration from environment variables injected by
 | `K8S_SNIFFER_AGENT_POD` | Agent pod name (downward API) |
 | `K8S_SNIFFER_HUB_ADDR` | Hub gRPC dial target (`host:port`) |
 | `K8S_SNIFFER_CRI_SOCKET` | Node CRI socket host path |
+| `K8S_SNIFFER_LOG_LEVEL` | Optional log verbosity (`info` or `debug`) |
 
 Flow:
 
@@ -30,6 +31,13 @@ Flow:
 
 `capture.AgentConfig.HubIngestAddr` is required when building agent pods.
 
+**Hub reachability (MVP):** agents dial `HubIngestAddr` from a node pod. The
+Phase 1 hub runs in-process in the CLI on the operator machine, so
+`127.0.0.1:…` is only valid for local integration tests — not for a real
+cluster agent. T1.14 (`capture` command) will define how the CLI advertises a
+node-reachable ingest address (port-forward, hostNetwork relay, or similar).
+Until then, golden manifests use loopback for unit tests only.
+
 ## 2. Netns resolution (T1.10)
 
 Package: `pkg/agent/netns`.
@@ -37,8 +45,10 @@ Package: `pkg/agent/netns`.
 `CRIResolver` dials the node CRI socket (`unix://` + mounted path) and:
 
 1. Lists the pod sandbox by Kubernetes labels.
-2. Picks a running workload container (skips `POD` infra when possible).
-3. Reads the container PID from verbose `ContainerStatus` info.
+2. Picks a running workload container (skips `POD` infra when possible;
+   sorts by name for stable choice; honors `PodRef.container_id` when set).
+3. Reads the container PID from verbose `ContainerStatus` info (containerd nests
+   `pid` inside `Info["info"]` JSON).
 4. Returns `/proc/<pid>/ns/net`.
 
 `MapResolver` supports unit tests without a real CRI socket.
@@ -53,8 +63,11 @@ Package: `pkg/agent/capture`.
 nsenter --net=/proc/<pid>/ns/net tcpdump -i any -U -w - -s <snaplen> [bpf]
 ```
 
+Only the first interface in `Target.interfaces` is honored; more than one
+returns an error until multi-iface capture is implemented.
+
 `-U` flushes each packet so the pcap stream can be read incrementally from
-stdout.
+stdout. stderr is captured and included in process exit errors.
 
 ## 4. Frame streaming (T1.12)
 
@@ -69,8 +82,10 @@ stdout.
 
 Hub (`pkg/hub/packets.go`):
 
-- `StreamCapture` ingests batches and fans records to `SubscribePackets`
-  subscribers (async per subscriber so ingest does not block on slow clients).
+- `StreamCapture` validates batch `session_id`, `node`, and `stream_id` against
+  the live assignment before ingest.
+- Records fan out to `SubscribePackets` subscribers with non-blocking sends
+  (slow clients drop frames rather than blocking ingest).
 - Returns `StreamCaptureSummary.records_accepted`.
 
 ## 5. Tests
@@ -79,7 +94,6 @@ Hub (`pkg/hub/packets.go`):
 |------|-------|
 | `pkg/agent/config_test.go` | Env validation |
 | `pkg/agent/capture/pcap_test.go` | PCAP → `PacketFrame` |
+| `pkg/agent/netns/resolver_test.go` | CRI PID parsing, workload container pick |
 | `pkg/hub/packets_test.go` | Fan-out to subscribers |
-| `pkg/hub/hub_test.go` `WatchTargets` | Assignment delivery (IT1.2 partial) |
-
-Cluster validation (curl traffic readable in pcap) lands with T1.15/T1.17 e2e.
+| `pkg/hub/hub_test.go` `WatchTargets` | Assignment delivery (IT1.2 partial) | (curl traffic readable in pcap) lands with T1.15/T1.17 e2e.

@@ -8,17 +8,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	snifferagent "github.com/sthuck/k8s-sniffer/pkg/agent"
 	"github.com/sthuck/k8s-sniffer/pkg/capture"
 )
 
-// Agent runtime environment variable names (also used by PodManifest).
+// Agent runtime environment variable names re-exported from pkg/agent for pod manifests.
 const (
-	envSessionID = "K8S_SNIFFER_SESSION_ID"
-	envNode      = "K8S_SNIFFER_NODE"
-	envAgentPod  = "K8S_SNIFFER_AGENT_POD"
-	envHubAddr   = "K8S_SNIFFER_HUB_ADDR"
-	envCRISocket = "K8S_SNIFFER_CRI_SOCKET"
-	envLogLevel  = "K8S_SNIFFER_LOG_LEVEL"
+	envSessionID = snifferagent.EnvSessionID
+	envNode      = snifferagent.EnvNode
+	envAgentPod  = snifferagent.EnvAgentPod
+	envHubAddr   = snifferagent.EnvHubAddr
+	envCRISocket = snifferagent.EnvCRISocket
+	envLogLevel  = snifferagent.EnvLogLevel
 )
 
 const (
@@ -75,6 +76,22 @@ func PodManifest(sessionID, nodeName string, cfg capture.AgentConfig, activeDead
 	}
 	automountToken := false
 
+	env := []corev1.EnvVar{
+		{Name: envSessionID, Value: sessionID},
+		{Name: envNode, Value: nodeName},
+		{Name: envHubAddr, Value: cfg.HubIngestAddr},
+		{Name: envCRISocket, Value: cfg.CRISocketHostPath},
+		{
+			Name: envAgentPod,
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+			},
+		},
+	}
+	if cfg.LogLevel != "" {
+		env = append(env, corev1.EnvVar{Name: envLogLevel, Value: cfg.LogLevel})
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: GenerateNamePrefix,
@@ -96,18 +113,7 @@ func PodManifest(sessionID, nodeName string, cfg capture.AgentConfig, activeDead
 					Image:           cfg.Image,
 					ImagePullPolicy: pullPolicy,
 					SecurityContext: securityContext,
-					Env: []corev1.EnvVar{
-						{Name: envSessionID, Value: sessionID},
-						{Name: envNode, Value: nodeName},
-						{Name: envHubAddr, Value: cfg.HubIngestAddr},
-						{Name: envCRISocket, Value: cfg.CRISocketHostPath},
-						{
-							Name: envAgentPod,
-							ValueFrom: &corev1.EnvVarSource{
-								FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
-							},
-						},
-					},
+					Env:             env,
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							Name:      CRISocketVolumeName,

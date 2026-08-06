@@ -426,6 +426,9 @@ func (h *Hub) StreamCapture(stream snifferv1.AgentIngestService_StreamCaptureSer
 		if !ok {
 			return status.Errorf(codes.NotFound, "session %q not found", batch.GetSessionId())
 		}
+		if err := sess.validateCaptureBatch(batch); err != nil {
+			return status.Errorf(codes.FailedPrecondition, "capture batch: %v", err)
+		}
 		for _, rec := range batch.GetRecords() {
 			sess.packets.publish(rec)
 			accepted++

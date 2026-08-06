@@ -162,14 +162,27 @@ func (r *Runner) captureTarget(ctx context.Context, assignment *snifferv1.AgentA
 			Record: &snifferv1.CaptureRecord_WireFrame{WireFrame: frame},
 		})
 		if len(batch.Records) >= defaultBatchSize {
-			batchCh <- cloneBatch(batch)
+			if err := sendBatch(ctx, batchCh, cloneBatch(batch)); err != nil {
+				return err
+			}
 			batch.Records = batch.Records[:0]
 		}
 	}
 	if len(batch.Records) > 0 {
-		batchCh <- cloneBatch(batch)
+		if err := sendBatch(ctx, batchCh, cloneBatch(batch)); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func sendBatch(ctx context.Context, batchCh chan<- *snifferv1.CaptureBatch, batch *snifferv1.CaptureBatch) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case batchCh <- batch:
+		return nil
+	}
 }
 
 func cloneBatch(b *snifferv1.CaptureBatch) *snifferv1.CaptureBatch {

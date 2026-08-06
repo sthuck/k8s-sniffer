@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
@@ -114,6 +115,25 @@ func (s *sessionState) assignmentFor(node string) (*snifferv1.AgentAssignment, b
 		return nil, false
 	}
 	return proto.Clone(a).(*snifferv1.AgentAssignment), true
+}
+
+func (s *sessionState) validateCaptureBatch(batch *snifferv1.CaptureBatch) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if batch.GetSessionId() != "" && batch.GetSessionId() != s.proto.Id {
+		return fmt.Errorf("session_id mismatch")
+	}
+	if s.proto.State != snifferv1.SessionState_SESSION_STATE_RUNNING {
+		return fmt.Errorf("session not running")
+	}
+	rec, ok := s.agents[batch.GetNode()]
+	if !ok {
+		return fmt.Errorf("no agent for node %q", batch.GetNode())
+	}
+	if batch.GetStreamId() != "" && rec.streamID != batch.GetStreamId() {
+		return fmt.Errorf("stream_id mismatch")
+	}
+	return nil
 }
 
 func isTerminalState(state snifferv1.SessionState) bool {

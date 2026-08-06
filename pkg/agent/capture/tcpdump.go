@@ -1,6 +1,7 @@
 package capture
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -36,6 +37,9 @@ func (t *Tcpdump) Start(ctx context.Context, netnsPath string, snaplen uint32, b
 	if netnsPath == "" {
 		return nil, fmt.Errorf("netns path: required")
 	}
+	if len(interfaces) > 1 {
+		return nil, fmt.Errorf("multiple interfaces: only one supported in MVP (got %d)", len(interfaces))
+	}
 	iface := "any"
 	if len(interfaces) > 0 && strings.TrimSpace(interfaces[0]) != "" {
 		iface = interfaces[0]
@@ -57,15 +61,20 @@ func (t *Tcpdump) Start(ctx context.Context, netnsPath string, snaplen uint32, b
 	if err != nil {
 		return nil, fmt.Errorf("tcpdump stdout: %w", err)
 	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("tcpdump stderr: %w", err)
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start tcpdump: %w", err)
 	}
-	return &cmdReadCloser{cmd: cmd, r: stdout}, nil
+	return &cmdReadCloser{cmd: cmd, r: stdout, stderr: stderr}, nil
 }
 
 type cmdReadCloser struct {
-	cmd *exec.Cmd
-	r   io.ReadCloser
+	cmd    *exec.Cmd
+	r      io.ReadCloser
+	stderr io.Reader
 }
 
 func (c *cmdReadCloser) Read(p []byte) (int, error) {
@@ -74,8 +83,15 @@ func (c *cmdReadCloser) Read(p []byte) (int, error) {
 
 func (c *cmdReadCloser) Close() error {
 	_ = c.r.Close()
+	var stderrBuf bytes.Buffer
+	if c.stderr != nil {
+		_, _ = io.Copy(&stderrBuf, c.stderr)
+	}
 	err := c.cmd.Wait()
 	if err != nil {
+		if msg := strings.TrimSpace(stderrBuf.String()); msg != "" {
+			return fmt.Errorf("tcpdump exit: %w: %s", err, msg)
+		}
 		return fmt.Errorf("tcpdump exit: %w", err)
 	}
 	return nil

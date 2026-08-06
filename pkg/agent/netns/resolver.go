@@ -3,7 +3,9 @@ package netns
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 
 	"google.golang.org/grpc"
@@ -58,7 +60,7 @@ func (r *CRIResolver) Resolve(ctx context.Context, pod *snifferv1.PodRef) (strin
 		return "", err
 	}
 
-	containerID, err := r.findWorkloadContainer(ctx, sandboxID)
+	containerID, err := r.findWorkloadContainer(ctx, sandboxID, pod)
 	if err != nil {
 		return "", err
 	}
@@ -94,7 +96,7 @@ func (r *CRIResolver) findSandbox(ctx context.Context, pod *snifferv1.PodRef) (s
 	return "", fmt.Errorf("no running sandbox for pod %s/%s", pod.GetNamespace(), pod.GetName())
 }
 
-func (r *CRIResolver) findWorkloadContainer(ctx context.Context, sandboxID string) (string, error) {
+func (r *CRIResolver) findWorkloadContainer(ctx context.Context, sandboxID string, pod *snifferv1.PodRef) (string, error) {
 	resp, err := r.runtime.ListContainers(ctx, &runtimeapi.ListContainersRequest{
 		Filter: &runtimeapi.ContainerFilter{
 			PodSandboxId: sandboxID,
@@ -106,18 +108,38 @@ func (r *CRIResolver) findWorkloadContainer(ctx context.Context, sandboxID strin
 	if err != nil {
 		return "", fmt.Errorf("list containers: %w", err)
 	}
-	for _, c := range resp.GetContainers() {
-		// Skip the infra/pause container when a named workload container exists.
+	containers := resp.GetContainers()
+	if containerID := pod.GetContainerId(); containerID != "" {
+		for _, c := range containers {
+			if c.GetId() == containerID {
+				return c.GetId(), nil
+			}
+		}
+		return "", fmt.Errorf("container %q not running in sandbox %s", containerID, sandboxID)
+	}
+
+	candidates := workloadContainers(containers)
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no running container in sandbox %s", sandboxID)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].GetMetadata().GetName() < candidates[j].GetMetadata().GetName()
+	})
+	return candidates[0].GetId(), nil
+}
+
+func workloadContainers(containers []*runtimeapi.Container) []*runtimeapi.Container {
+	var out []*runtimeapi.Container
+	for _, c := range containers {
 		if c.GetMetadata().GetName() == "POD" {
 			continue
 		}
-		return c.GetId(), nil
+		out = append(out, c)
 	}
-	// Single-container pods may only expose the sandbox container.
-	for _, c := range resp.GetContainers() {
-		return c.GetId(), nil
+	if len(out) > 0 {
+		return out
 	}
-	return "", fmt.Errorf("no running container in sandbox %s", sandboxID)
+	return containers
 }
 
 func (r *CRIResolver) containerPID(ctx context.Context, containerID string) (int, error) {
@@ -128,7 +150,17 @@ func (r *CRIResolver) containerPID(ctx context.Context, containerID string) (int
 	if err != nil {
 		return 0, fmt.Errorf("container status: %w", err)
 	}
-	if pidStr, ok := resp.GetInfo()["pid"]; ok && pidStr != "" {
+	pid, err := parseContainerPID(resp.GetInfo())
+	if err != nil {
+		return 0, fmt.Errorf("container %s: %w", containerID, err)
+	}
+	return pid, nil
+}
+
+// parseContainerPID extracts the init PID from verbose ContainerStatus info.
+// containerd nests pid inside Info["info"] JSON; CRI-O may expose Info["pid"].
+func parseContainerPID(info map[string]string) (int, error) {
+	if pidStr, ok := info["pid"]; ok && pidStr != "" {
 		pid, err := strconv.Atoi(pidStr)
 		if err != nil {
 			return 0, fmt.Errorf("parse container pid %q: %w", pidStr, err)
@@ -137,5 +169,16 @@ func (r *CRIResolver) containerPID(ctx context.Context, containerID string) (int
 			return pid, nil
 		}
 	}
-	return 0, fmt.Errorf("container %s: pid not available from CRI", containerID)
+	if raw, ok := info["info"]; ok && raw != "" {
+		var meta struct {
+			PID int `json:"pid"`
+		}
+		if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+			return 0, fmt.Errorf("parse container info json: %w", err)
+		}
+		if meta.PID > 0 {
+			return meta.PID, nil
+		}
+	}
+	return 0, fmt.Errorf("pid not available from CRI")
 }

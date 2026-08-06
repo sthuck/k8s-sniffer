@@ -20,18 +20,16 @@ func newPacketLog() *packetLog {
 
 func (l *packetLog) publish(rec *snifferv1.CaptureRecord) {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.closed {
-		l.mu.Unlock()
 		return
 	}
-	subs := make([]chan *snifferv1.CaptureRecord, 0, len(l.subs))
 	for _, ch := range l.subs {
-		subs = append(subs, ch)
-	}
-	l.mu.Unlock()
-	for _, ch := range subs {
-		ch := ch
-		go func() { ch <- rec }()
+		select {
+		case ch <- rec:
+		default:
+			// Drop for slow subscribers; ingest must not block or spawn goroutines.
+		}
 	}
 }
 
