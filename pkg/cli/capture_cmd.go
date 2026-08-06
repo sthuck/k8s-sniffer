@@ -29,7 +29,6 @@ func NewCaptureCommand(ctx context.Context, version string, run func(context.Con
 		allowMutableImg bool
 		hubListen       string
 		hubIngest       string
-		logLevel        string
 	)
 
 	cmd := &cobra.Command{
@@ -38,9 +37,13 @@ func NewCaptureCommand(ctx context.Context, version string, run func(context.Con
 		Long: `Match Running pods in a namespace by name regex, schedule node-local
 capture agents, and write wire traffic to a PCAP or PCAPng file.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			patterns, err := ParsePodPatterns(podPatterns)
+			if err != nil {
+				return err
+			}
 			spec := capture.Spec{
 				Namespace:   namespace,
-				PodPatterns: append([]string(nil), podPatterns...),
+				PodPatterns: patterns,
 				BPFFilter:   bpfFilter,
 				Duration:    duration,
 				Snaplen:     snaplen,
@@ -51,7 +54,7 @@ capture agents, and write wire traffic to a PCAP or PCAPng file.`,
 			agentCfg.Image = agentImage
 			agentCfg.CRISocketHostPath = criSocket
 			agentCfg.AllowMutableImage = allowMutableImg
-			agentCfg.LogLevel = logLevel
+			agentCfg.LogLevel = LogLevelFromCommand(cmd)
 
 			return run(ctx, CaptureOptions{
 				Spec: spec,
@@ -70,7 +73,7 @@ capture agents, and write wire traffic to a PCAP or PCAPng file.`,
 	}
 
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "Namespace of pods to capture (required)")
-	cmd.Flags().StringArrayVar(&podPatterns, "pod", nil, "Pod name regex (repeatable)")
+	cmd.Flags().StringArrayVar(&podPatterns, "pod", nil, "Pod name regex (repeatable; comma-separated values also accepted)")
 	cmd.Flags().StringVarP(&outPath, "out", "o", "capture.pcapng", "Output PCAP path, or \"-\" for stdout")
 	cmd.Flags().StringVar(&bpfFilter, "bpf", "", "tcpdump BPF filter")
 	cmd.Flags().DurationVar(&duration, "duration", 0, "Hard stop after duration (0 = until interrupted)")
@@ -91,7 +94,17 @@ capture agents, and write wire traffic to a PCAP or PCAPng file.`,
 	return cmd
 }
 
-// ParsePodPatterns splits comma-separated patterns from a single flag value.
+// LogLevelFromCommand reads the root --log-level persistent flag.
+func LogLevelFromCommand(cmd *cobra.Command) string {
+	for cur := cmd; cur != nil; cur = cur.Parent() {
+		if f := cur.PersistentFlags().Lookup("log-level"); f != nil {
+			return f.Value.String()
+		}
+	}
+	return ""
+}
+
+// ParsePodPatterns splits comma-separated patterns from repeatable --pod values.
 func ParsePodPatterns(values []string) ([]string, error) {
 	var out []string
 	for _, value := range values {

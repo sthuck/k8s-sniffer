@@ -14,7 +14,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/gopacket/gopacket/pcapgo"
 
@@ -37,29 +36,30 @@ func TestE2E1_1_SmokeCapture(t *testing.T) {
 		t.Skip("set K8S_SNIFFER_E2E_HUB_INGEST_ADDR to run cluster e2e")
 	}
 
-	cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath())
+	kclient, err := k8s.New(k8s.ClientConfig{
+		Kubeconfig: kubeconfigPath(),
+		Context:    kubeContext,
+		UserAgent:  "k8s-sniffer/e2e",
+	})
 	if err != nil {
-		t.Fatalf("kubeconfig: %v", err)
+		t.Fatalf("kubernetes client: %v", err)
 	}
-	cfg.Context = kubeContext
-	client, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		t.Fatalf("clientset: %v", err)
-	}
+	client := kclient.Clientset
 
 	waitForDeployments(t, client, "e2e-fixtures", "http-echo-a", "http-echo-b")
 
 	outPath := filepath.Join(t.TempDir(), "capture.pcapng")
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
+	sessionReady := make(chan struct{})
 	captureDone := make(chan error, 1)
 	go func() {
 		captureDone <- cli.RunCapture(ctx, cli.CaptureOptions{
 			Spec: capture.Spec{
 				Namespace:   "e2e-fixtures",
 				PodPatterns: []string{`http-echo-.*`},
-				Duration:    20 * time.Second,
+				Duration:    30 * time.Second,
 			},
 			Sink: capture.SinkSpec{Out: outPath},
 			Agent: capture.AgentConfig{
@@ -76,10 +76,17 @@ func TestE2E1_1_SmokeCapture(t *testing.T) {
 			},
 			HubListen: "0.0.0.0:" + hubPort(hubIngest),
 			HubIngest: hubIngest,
+			OnSessionReady: func() {
+				close(sessionReady)
+			},
 		})
 	}()
 
-	time.Sleep(5 * time.Second)
+	select {
+	case <-sessionReady:
+	case <-time.After(2 * time.Minute):
+		t.Fatal("timed out waiting for capture session to become ready")
+	}
 	generateTraffic(t, kubeContext)
 
 	if err := <-captureDone; err != nil {
@@ -139,7 +146,7 @@ func generateTraffic(t *testing.T, kubeContext string) {
 		)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Logf("curl %s: %v (%s)", target, err, out)
+			t.Fatalf("curl %s: %v (%s)", target, err, out)
 		}
 	}
 }
@@ -150,13 +157,9 @@ func assertPCAPHasPackets(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("read pcap: %v", err)
 	}
-	reader, err := pcapgo.NewReader(bytes.NewReader(data))
+	reader, err := pcapgo.NewNgReader(bytes.NewReader(data), pcapgo.DefaultNgReaderOptions)
 	if err != nil {
-		// PCAPng fallback: non-empty output is enough for smoke when tshark is absent.
-		if len(data) < 64 {
-			t.Fatalf("pcap output too small: %d bytes", len(data))
-		}
-		return
+		t.Fatalf("pcapng reader: %v", err)
 	}
 	count := 0
 	for {
@@ -166,7 +169,7 @@ func assertPCAPHasPackets(t *testing.T, path string) {
 		count++
 	}
 	if count == 0 {
-		t.Fatal("pcap contains no packets")
+		t.Fatal("pcapng contains no packets")
 	}
 }
 

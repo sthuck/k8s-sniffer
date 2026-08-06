@@ -42,15 +42,27 @@ make build AGENT_IMAGE=ghcr.io/sthuck/k8s-sniffer-agent@sha256:...
 Development builds have no default agent image, so the image must be passed
 explicitly rather than resolving to a mutable tag.
 
-## Intended CLI (sketch)
+## Agent image & e2e
+
+```bash
+make image-agent AGENT_IMAGE=k8s-sniffer-agent:e2e
+kubectl apply -f deploy/rbac.yaml
+./test/e2e/run.sh kind    # create kind cluster, load image, apply fixtures
+./test/e2e/run.sh test    # E2E1.1 smoke (needs kind + docker)
+```
+
+## CLI
 
 ```bash
 k8s-sniffer capture \
   --namespace prod \
-  --pod 'payments-.*|checkout-.*' \
+  --pod 'payments-.*' --pod 'checkout-.*' \
   --out ./session.pcapng \
-  --tls auto
+  --agent-image ghcr.io/sthuck/k8s-sniffer-agent@sha256:... \
+  --hub-ingest-addr 172.18.0.1:30551
 ```
+
+TLS modes (`--tls auto`) land in Phase 3; Phase 1 is wire capture only.
 
 ## High-level shape
 

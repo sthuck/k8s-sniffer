@@ -35,8 +35,8 @@ Usage: $0 <kind|test>
 Environment:
   KIND_CLUSTER_NAME          kind cluster name (default: k8s-sniffer-e2e)
   AGENT_IMAGE                agent image tag to build/load (default: k8s-sniffer-agent:e2e)
-  K8S_SNIFFER_HUB_INGEST_HOST  host IP agents use to reach CLI hub (default: 127.0.0.1)
-  K8S_SNIFFER_HUB_INGEST_PORT  host port mapped into kind (default: 30551)
+  K8S_SNIFFER_HUB_INGEST_HOST  host IP agents use to reach CLI hub (default: kind docker gateway or default-route gateway)
+  K8S_SNIFFER_HUB_INGEST_PORT  host port the CLI hub listens on (default: 30551)
 EOF
 }
 

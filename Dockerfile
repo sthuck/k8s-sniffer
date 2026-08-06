@@ -7,7 +7,12 @@ RUN go mod download
 COPY . .
 ARG VERSION=dev
 ARG AGENT_IMAGE=
-RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/k8s-sniffer ./cmd/k8s-sniffer && \
+RUN set -eux; \
+    LDFLAGS="-s -w -X main.version=${VERSION}"; \
+    if [ -n "${AGENT_IMAGE}" ]; then \
+      LDFLAGS="${LDFLAGS} -X github.com/sthuck/k8s-sniffer/pkg/capture.agentImageRef=${AGENT_IMAGE}"; \
+    fi; \
+    CGO_ENABLED=0 go build -ldflags "${LDFLAGS}" -o /out/k8s-sniffer ./cmd/k8s-sniffer; \
     CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/k8s-sniffer-agent ./cmd/k8s-sniffer-agent
 
 # Agent runtime: privileged pod needs tcpdump + nsenter on the node netns path.

@@ -24,14 +24,6 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
-  # Schedule and tear down ephemeral agent pods.
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["create", "delete"]
-  # Optional: fetch agent logs when debugging failed captures.
-  - apiGroups: [""]
-    resources: ["pods/log"]
-    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -41,6 +33,33 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: k8s-sniffer-capture
+subjects:
+  - kind: ServiceAccount
+    name: k8s-sniffer
+    namespace: k8s-sniffer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k8s-sniffer-agent
+  namespace: k8s-sniffer
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k8s-sniffer-agent
+  namespace: k8s-sniffer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: k8s-sniffer-agent
 subjects:
   - kind: ServiceAccount
     name: k8s-sniffer

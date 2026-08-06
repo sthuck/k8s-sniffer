@@ -35,6 +35,8 @@ type CaptureOptions struct {
 	HubListen   string
 	HubIngest   string
 	EventWriter io.Writer
+	// OnSessionReady is called after CreateSession succeeds and capture can begin.
+	OnSessionReady func()
 }
 
 // RunCapture starts an in-process hub, creates a session, and writes PCAP output
@@ -115,19 +117,13 @@ func RunCapture(ctx context.Context, opts CaptureOptions) error {
 	}
 	defer pcapWriter.Close()
 
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	if spec.Duration > 0 {
-		var durationCancel context.CancelFunc
-		runCtx, durationCancel = context.WithTimeout(runCtx, spec.Duration)
-		defer durationCancel()
-	}
+	// Bootstrap (discovery + agent Ready) is not bounded by --duration; the CLI
+	// owns the hard stop after the session is running.
+	hubSpec := spec.ToProto()
+	hubSpec.Duration = nil
 
-	sigCtx, stopSignals := signal.NotifyContext(runCtx, syscall.SIGINT, syscall.SIGTERM)
-	defer stopSignals()
-
-	createResp, err := hubClient.CreateSession(runCtx, &snifferv1.CreateSessionRequest{
-		Spec: spec.ToProto(),
+	createResp, err := hubClient.CreateSession(ctx, &snifferv1.CreateSessionRequest{
+		Spec: hubSpec,
 	})
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
@@ -141,11 +137,17 @@ func RunCapture(ctx context.Context, opts CaptureOptions) error {
 	if session.GetState() == snifferv1.SessionState_SESSION_STATE_FAILED {
 		return fmt.Errorf("session failed: %s", session.GetFailureReason())
 	}
+	if opts.OnSessionReady != nil {
+		opts.OnSessionReady()
+	}
+
+	subscribeCtx, subscribeCancel := context.WithCancel(context.Background())
+	defer subscribeCancel()
 
 	eventDone := make(chan struct{})
 	go func() {
 		defer close(eventDone)
-		_ = watchEvents(runCtx, hubClient, sessionID, opts.EventWriter)
+		_ = watchEvents(subscribeCtx, hubClient, sessionID, opts.EventWriter)
 	}()
 
 	packetErrCh := make(chan error, 1)
@@ -153,7 +155,7 @@ func RunCapture(ctx context.Context, opts CaptureOptions) error {
 	packetWG.Add(1)
 	go func() {
 		defer packetWG.Done()
-		packetErrCh <- subscribePackets(runCtx, hubClient, sessionID, pcapWriter)
+		packetErrCh <- subscribePackets(subscribeCtx, hubClient, sessionID, pcapWriter)
 	}()
 
 	stopOnce := sync.Once{}
@@ -171,16 +173,23 @@ func RunCapture(ctx context.Context, opts CaptureOptions) error {
 					slog.String("err", err.Error()),
 				)
 			}
-			cancel()
+			subscribeCancel()
 		})
 	}
 
+	if spec.Duration > 0 {
+		time.AfterFunc(spec.Duration, func() { stopSession("duration") })
+	}
+
+	sigCtx, stopSignals := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+
 	select {
 	case <-sigCtx.Done():
-		if errors.Is(sigCtx.Err(), context.DeadlineExceeded) {
-			stopSession("duration")
-		} else {
+		if errors.Is(sigCtx.Err(), context.Canceled) {
 			stopSession("signal")
+		} else {
+			stopSession("context ended")
 		}
 	case err := <-packetErrCh:
 		if err != nil && !errors.Is(err, context.Canceled) {

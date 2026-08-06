@@ -3,8 +3,3 @@ kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
   - role: control-plane
-    extraPortMappings:
-      # Optional host port for hub ingest during e2e (see run.sh).
-      - containerPort: 30551
-        hostPort: 30551
-        protocol: TCP
