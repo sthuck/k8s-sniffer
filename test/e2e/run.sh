@@ -110,10 +110,11 @@ case "${1:-}" in
   test)
     run_tests
     ;;
-  ""|-h|--help)
+  -h|--help)
     usage
     ;;
-  *)
+  ""|all|*)
+    # Default / any other arg: bring cluster up and run E2E1.1 (CI entrypoint).
     cluster_up
     run_tests
     ;;

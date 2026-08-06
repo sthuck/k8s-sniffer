@@ -75,7 +75,7 @@ Goal: `k8s-sniffer capture -n NS --pod REGEX -o out.pcap` works for multiple pod
 | T-TEST.3 | envtest setup for Hub agent lifecycle | M | T1.7 | **IT1.1** passes without kind |
 | T-TEST.7 | E2e failure artifacts (pcap, agent logs, cluster dump) | S | T-TEST.2 | Failed CI uploads artifacts |
 
-**Phase 1 exit:** T1.14 + T1.17 + **E2E1.1** (and ideally E2E1.3) green. TLS explicitly out of scope.
+**Phase 1 exit:** T1.14 + T1.17 + **E2E1.1** + IT1.1 + CI (T-TEST.2/3/7) green. TLS explicitly out of scope. E2E1.3 remains a nice-to-have in the same harness.
 
 ---
 
