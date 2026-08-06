@@ -7,8 +7,10 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
+	sharedcapture "github.com/sthuck/k8s-sniffer/pkg/capture"
 )
 
 // Client talks to the hub AgentIngestService.
@@ -39,7 +41,8 @@ func (c *Client) Close() error {
 }
 
 // WatchTargets blocks until the first assignment arrives or ctx is cancelled.
-func (c *Client) WatchTargets(ctx context.Context, sessionID, node, agentPod string) (*snifferv1.AgentAssignment, error) {
+func (c *Client) WatchTargets(ctx context.Context, sessionID, node, agentPod, streamID string) (*snifferv1.AgentAssignment, error) {
+	ctx = metadata.AppendToOutgoingContext(ctx, sharedcapture.AgentStreamMetadataKey, streamID)
 	stream, err := c.ingest.WatchTargets(ctx, &snifferv1.WatchTargetsRequest{
 		SessionId: sessionID,
 		Node:      node,
@@ -53,6 +56,13 @@ func (c *Client) WatchTargets(ctx context.Context, sessionID, node, agentPod str
 		return nil, fmt.Errorf("receive assignment: %w", err)
 	}
 	return assignment, nil
+}
+
+func (c *Client) ReportStatus(ctx context.Context, req *snifferv1.ReportStatusRequest) error {
+	if _, err := c.ingest.ReportStatus(ctx, req); err != nil {
+		return fmt.Errorf("report status: %w", err)
+	}
+	return nil
 }
 
 // StreamCapture opens the ingest stream.

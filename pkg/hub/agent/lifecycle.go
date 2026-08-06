@@ -35,6 +35,8 @@ type Manager struct {
 type CreateOptions struct {
 	// ActiveDeadline is a hard pod lifetime when non-zero (from session duration).
 	ActiveDeadline time.Duration
+	// StreamID authenticates this agent incarnation to the ingest service.
+	StreamID string
 }
 
 // NewManager returns a lifecycle manager. cfg is validated on each call via
@@ -126,7 +128,7 @@ func (m *Manager) CreateForNode(ctx context.Context, sessionID, nodeName string,
 		return existing, nil
 	}
 
-	pod, err := PodManifest(sessionID, nodeName, m.cfg, opts.ActiveDeadline)
+	pod, err := PodManifest(sessionID, opts.StreamID, nodeName, m.cfg, opts.ActiveDeadline)
 	if err != nil {
 		return nil, err
 	}

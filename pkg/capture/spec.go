@@ -112,7 +112,7 @@ type Spec struct {
 	// pod is selected when any pattern matches. At least one is required.
 	PodPatterns []string
 	// BPFFilter is a tcpdump-syntax capture filter applied in every target
-	// netns. Not validated locally: only tcpdump can compile it.
+	// netns. Syntax is compiled by tcpdump; option-like values are rejected here.
 	BPFFilter string
 	// Duration is a hard stop for the session. Zero means run until stopped.
 	Duration time.Duration
@@ -157,6 +157,9 @@ func (s Spec) Validate() error {
 		if _, err := regexp.Compile(pattern); err != nil {
 			errs = append(errs, fmt.Errorf("pod patterns[%d]: %w", i, err))
 		}
+	}
+	if strings.HasPrefix(strings.TrimSpace(s.BPFFilter), "-") {
+		errs = append(errs, errors.New("bpf filter: must not begin with '-'"))
 	}
 
 	if s.Duration < 0 {

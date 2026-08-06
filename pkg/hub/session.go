@@ -10,10 +10,16 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const (
+	maxBatchRecords      = 64
+	maxBatchPayloadBytes = 4 << 20
+)
+
 type agentRecord struct {
-	node     string
-	podName  string
-	streamID string
+	node         string
+	podName      string
+	streamID     string
+	lastSequence uint64
 }
 
 // sessionState is the in-memory hub state for one capture session.
@@ -107,31 +113,138 @@ func (s *sessionState) recordAgent(node, podName, streamID string, assignment *s
 	s.assigns[node] = assignment
 }
 
-func (s *sessionState) assignmentFor(node string) (*snifferv1.AgentAssignment, bool) {
+func (s *sessionState) assignmentFor(node, podName, streamID string) (*snifferv1.AgentAssignment, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if node == "" || podName == "" || streamID == "" {
+		return nil, fmt.Errorf("node, agent_pod, and stream_id are required")
+	}
+	rec, ok := s.agents[node]
+	if !ok {
+		return nil, fmt.Errorf("no agent for node %q", node)
+	}
+	if rec.podName != podName || rec.streamID != streamID {
+		return nil, fmt.Errorf("agent identity mismatch")
+	}
 	a, ok := s.assigns[node]
 	if !ok {
-		return nil, false
+		return nil, fmt.Errorf("no assignment for node %q", node)
 	}
-	return proto.Clone(a).(*snifferv1.AgentAssignment), true
+	return proto.Clone(a).(*snifferv1.AgentAssignment), nil
 }
 
 func (s *sessionState) validateCaptureBatch(batch *snifferv1.CaptureBatch) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if batch.GetSessionId() != "" && batch.GetSessionId() != s.proto.Id {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if batch.GetSessionId() == "" || batch.GetSessionId() != s.proto.Id {
 		return fmt.Errorf("session_id mismatch")
 	}
-	if s.proto.State != snifferv1.SessionState_SESSION_STATE_RUNNING {
-		return fmt.Errorf("session not running")
+	switch s.proto.State {
+	case snifferv1.SessionState_SESSION_STATE_STARTING,
+		snifferv1.SessionState_SESSION_STATE_RUNNING,
+		snifferv1.SessionState_SESSION_STATE_STOPPING:
+	default:
+		return fmt.Errorf("session does not accept capture data in state %s", s.proto.State)
 	}
 	rec, ok := s.agents[batch.GetNode()]
 	if !ok {
 		return fmt.Errorf("no agent for node %q", batch.GetNode())
 	}
-	if batch.GetStreamId() != "" && rec.streamID != batch.GetStreamId() {
+	if batch.GetStreamId() == "" || rec.streamID != batch.GetStreamId() {
 		return fmt.Errorf("stream_id mismatch")
+	}
+	if len(batch.GetRecords()) > maxBatchRecords {
+		return fmt.Errorf("too many records: %d > %d", len(batch.GetRecords()), maxBatchRecords)
+	}
+	assignment := s.assigns[batch.GetNode()]
+	var payloadBytes int
+	lastSequence := rec.lastSequence
+	for i, record := range batch.GetRecords() {
+		n, err := validateCaptureRecord(record, assignment)
+		if err != nil {
+			return fmt.Errorf("records[%d]: %w", i, err)
+		}
+		if frame := record.GetWireFrame(); frame != nil {
+			if frame.GetSequence() != lastSequence+1 {
+				return fmt.Errorf("records[%d]: sequence %d, want %d", i, frame.GetSequence(), lastSequence+1)
+			}
+			lastSequence = frame.GetSequence()
+		}
+		payloadBytes += n
+		if payloadBytes > maxBatchPayloadBytes {
+			return fmt.Errorf("payload bytes exceed %d", maxBatchPayloadBytes)
+		}
+	}
+	rec.lastSequence = lastSequence
+	s.agents[batch.GetNode()] = rec
+	return nil
+}
+
+func (s *sessionState) validateAgentEnvelope(sessionID, node, streamID string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if sessionID == "" || sessionID != s.proto.Id {
+		return fmt.Errorf("session_id mismatch")
+	}
+	rec, ok := s.agents[node]
+	if !ok {
+		return fmt.Errorf("no agent for node %q", node)
+	}
+	if streamID == "" || streamID != rec.streamID {
+		return fmt.Errorf("stream_id mismatch")
+	}
+	return nil
+}
+
+func validateCaptureRecord(record *snifferv1.CaptureRecord, assignment *snifferv1.AgentAssignment) (int, error) {
+	if record == nil {
+		return 0, fmt.Errorf("record is required")
+	}
+	var pod *snifferv1.PodRef
+	var payload []byte
+	switch {
+	case record.GetWireFrame() != nil:
+		frame := record.GetWireFrame()
+		pod = frame.GetPod()
+		payload = frame.GetPayload()
+		if frame.GetSource() != snifferv1.PacketSource_PACKET_SOURCE_WIRE {
+			return 0, fmt.Errorf("wire frame has invalid source %s", frame.GetSource())
+		}
+		if frame.GetTimestamp() == nil || frame.GetTimestamp().CheckValid() != nil {
+			return 0, fmt.Errorf("wire frame timestamp is invalid")
+		}
+		if frame.GetOriginalLength() < uint32(len(payload)) {
+			return 0, fmt.Errorf("payload exceeds original length")
+		}
+	case record.GetTlsEvent() != nil:
+		event := record.GetTlsEvent()
+		pod = event.GetPod()
+		payload = event.GetPayload()
+	default:
+		return 0, fmt.Errorf("record payload is required")
+	}
+	target := assignedTarget(assignment, pod)
+	if target == nil {
+		return 0, fmt.Errorf("pod is not assigned to this agent")
+	}
+	if record.GetTlsEvent() != nil && target.GetTlsMode() == snifferv1.TlsMode_TLS_MODE_OFF {
+		return 0, fmt.Errorf("TLS events are disabled for this target")
+	}
+	return len(payload), nil
+}
+
+func assignedTarget(assignment *snifferv1.AgentAssignment, pod *snifferv1.PodRef) *snifferv1.Target {
+	if assignment == nil || pod == nil {
+		return nil
+	}
+	for _, target := range assignment.GetTargets() {
+		candidate := target.GetPod()
+		if candidate.GetNamespace() == pod.GetNamespace() &&
+			candidate.GetName() == pod.GetName() &&
+			candidate.GetUid() == pod.GetUid() &&
+			candidate.GetNode() == pod.GetNode() {
+			return target
+		}
 	}
 	return nil
 }

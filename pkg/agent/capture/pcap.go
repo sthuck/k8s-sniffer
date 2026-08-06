@@ -15,7 +15,6 @@ import (
 type PCAPReader struct {
 	reader   *pcapgo.Reader
 	linkType snifferv1.LinkType
-	seq      uint64
 }
 
 // NewPCAPReader parses the pcap global header from r.
@@ -36,7 +35,6 @@ func (p *PCAPReader) ReadFrame(pod *snifferv1.PodRef) (*snifferv1.PacketFrame, e
 	if err != nil {
 		return nil, err
 	}
-	p.seq++
 	return &snifferv1.PacketFrame{
 		Pod:            pod,
 		Source:         snifferv1.PacketSource_PACKET_SOURCE_WIRE,
@@ -44,7 +42,6 @@ func (p *PCAPReader) ReadFrame(pod *snifferv1.PodRef) (*snifferv1.PacketFrame, e
 		LinkType:       p.linkType,
 		OriginalLength: uint32(ci.Length),
 		Payload:        data,
-		Sequence:       p.seq,
 	}, nil
 }
 

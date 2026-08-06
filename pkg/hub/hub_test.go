@@ -10,7 +10,9 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -74,6 +76,14 @@ func testWorkloadPods() []runtime.Object {
 }
 
 func startTestHub(t *testing.T, client *fake.Clientset) (snifferv1.HubServiceClient, func()) {
+	hubClient, _, cleanup := startTestHubServices(t, client)
+	return hubClient, cleanup
+}
+
+func startTestHubServices(
+	t *testing.T,
+	client *fake.Clientset,
+) (snifferv1.HubServiceClient, snifferv1.AgentIngestServiceClient, func()) {
 	t.Helper()
 	h, err := hub.New(hub.Options{
 		Kubernetes:   client,
@@ -104,7 +114,7 @@ func startTestHub(t *testing.T, client *fake.Clientset) (snifferv1.HubServiceCli
 		server.Stop()
 		_ = h.StopAll(context.Background())
 	}
-	return snifferv1.NewHubServiceClient(conn), cleanup
+	return snifferv1.NewHubServiceClient(conn), snifferv1.NewAgentIngestServiceClient(conn), cleanup
 }
 
 func TestCreateSessionSchedulesAgents(t *testing.T) {
@@ -197,30 +207,9 @@ func TestCreateSessionRejectsInvalidSpec(t *testing.T) {
 
 func TestWatchTargetsDeliversAssignment(t *testing.T) {
 	client := newTestKubernetes(testWorkloadPods()...)
-	listener := bufconn.Listen(1 << 20)
-	h, err := hub.New(hub.Options{Kubernetes: client, Agent: testAgentConfig(), ReadyTimeout: 5 * time.Second})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	server := grpc.NewServer()
-	snifferv1.RegisterHubServiceServer(server, h)
-	snifferv1.RegisterAgentIngestServiceServer(server, h)
-	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(server.Stop)
-
-	conn, err := grpc.NewClient("passthrough:///bufnet",
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return listener.DialContext(ctx)
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-
 	ctx := context.Background()
-	hubClient := snifferv1.NewHubServiceClient(conn)
-	ingestClient := snifferv1.NewAgentIngestServiceClient(conn)
+	hubClient, ingestClient, cleanup := startTestHubServices(t, client)
+	defer cleanup()
 
 	created, err := hubClient.CreateSession(ctx, &snifferv1.CreateSessionRequest{
 		Spec: &snifferv1.CaptureSpec{
@@ -233,11 +222,13 @@ func TestWatchTargetsDeliversAssignment(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	node := created.GetSession().GetNodes()[0]
+	agentPod, streamID := sessionAgentIdentity(t, client, created.GetSession().GetId(), node)
+	ctx = metadata.AppendToOutgoingContext(ctx, capture.AgentStreamMetadataKey, streamID)
 
 	stream, err := ingestClient.WatchTargets(ctx, &snifferv1.WatchTargetsRequest{
 		SessionId: created.GetSession().GetId(),
 		Node:      node,
-		AgentPod:  "k8s-sniffer-0001",
+		AgentPod:  agentPod,
 	})
 	if err != nil {
 		t.Fatalf("WatchTargets: %v", err)
@@ -261,6 +252,95 @@ func TestWatchTargetsDeliversAssignment(t *testing.T) {
 	if assignment.GetTargets()[0].GetPod().GetName() != "payments-api" {
 		t.Fatalf("target pod = %q", assignment.GetTargets()[0].GetPod().GetName())
 	}
+}
+
+func TestStreamCaptureDeliversAssignedPacket(t *testing.T) {
+	client := newTestKubernetes(testWorkloadPods()...)
+	hubClient, ingestClient, cleanup := startTestHubServices(t, client)
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	created, err := hubClient.CreateSession(ctx, &snifferv1.CreateSessionRequest{
+		Spec: &snifferv1.CaptureSpec{
+			Namespace:   "prod",
+			PodPatterns: []string{"payments-.*"},
+			TlsMode:     snifferv1.TlsMode_TLS_MODE_OFF,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	session := created.GetSession()
+	node := session.GetNodes()[0]
+	_, streamID := sessionAgentIdentity(t, client, session.GetId(), node)
+
+	packets, err := hubClient.SubscribePackets(ctx, &snifferv1.SubscribePacketsRequest{SessionId: session.GetId()})
+	if err != nil {
+		t.Fatalf("SubscribePackets: %v", err)
+	}
+	ingest, err := ingestClient.StreamCapture(ctx)
+	if err != nil {
+		t.Fatalf("StreamCapture: %v", err)
+	}
+	pod := &snifferv1.PodRef{Namespace: "prod", Name: "payments-api", Uid: "uid-1", Node: node}
+	if err := ingest.Send(&snifferv1.CaptureBatch{
+		SessionId: session.GetId(),
+		Node:      node,
+		StreamId:  streamID,
+		Records: []*snifferv1.CaptureRecord{{
+			Record: &snifferv1.CaptureRecord_WireFrame{
+				WireFrame: &snifferv1.PacketFrame{
+					Pod:            pod,
+					Source:         snifferv1.PacketSource_PACKET_SOURCE_WIRE,
+					Timestamp:      timestamppb.Now(),
+					LinkType:       snifferv1.LinkType_LINK_TYPE_ETHERNET,
+					OriginalLength: 3,
+					Payload:        []byte{1, 2, 3},
+					Sequence:       1,
+				},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	record, err := packets.Recv()
+	if err != nil {
+		t.Fatalf("Recv packet: %v", err)
+	}
+	if record.GetWireFrame().GetPod().GetUid() != "uid-1" {
+		t.Fatalf("unexpected packet pod: %+v", record.GetWireFrame().GetPod())
+	}
+	summary, err := ingest.CloseAndRecv()
+	if err != nil {
+		t.Fatalf("CloseAndRecv: %v", err)
+	}
+	if summary.GetRecordsAccepted() != 1 {
+		t.Fatalf("records accepted = %d, want 1", summary.GetRecordsAccepted())
+	}
+}
+
+func sessionAgentIdentity(t *testing.T, client *fake.Clientset, sessionID, node string) (string, string) {
+	t.Helper()
+	pods, err := client.CoreV1().Pods("k8s-sniffer").List(context.Background(), metav1.ListOptions{
+		LabelSelector: mustSessionSelector(t, sessionID),
+	})
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	for _, pod := range pods.Items {
+		if pod.Spec.NodeName != node {
+			continue
+		}
+		for _, env := range pod.Spec.Containers[0].Env {
+			if env.Name == capture.EnvAgentStreamID {
+				return pod.Name, env.Value
+			}
+		}
+		t.Fatalf("stream id env not found for agent %s", pod.Name)
+	}
+	t.Fatalf("agent not found for node %s", node)
+	return "", ""
 }
 
 func mustSessionSelector(t *testing.T, sessionID string) string {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -73,12 +74,16 @@ func (r *CRIResolver) Resolve(ctx context.Context, pod *snifferv1.PodRef) (strin
 }
 
 func (r *CRIResolver) findSandbox(ctx context.Context, pod *snifferv1.PodRef) (string, error) {
+	labels := map[string]string{
+		"io.kubernetes.pod.name":      pod.GetName(),
+		"io.kubernetes.pod.namespace": pod.GetNamespace(),
+	}
+	if pod.GetUid() != "" {
+		labels["io.kubernetes.pod.uid"] = pod.GetUid()
+	}
 	resp, err := r.runtime.ListPodSandbox(ctx, &runtimeapi.ListPodSandboxRequest{
 		Filter: &runtimeapi.PodSandboxFilter{
-			LabelSelector: map[string]string{
-				"io.kubernetes.pod.name":      pod.GetName(),
-				"io.kubernetes.pod.namespace": pod.GetNamespace(),
-			},
+			LabelSelector: labels,
 			State: &runtimeapi.PodSandboxStateValue{
 				State: runtimeapi.PodSandboxState_SANDBOX_READY,
 			},
@@ -87,7 +92,11 @@ func (r *CRIResolver) findSandbox(ctx context.Context, pod *snifferv1.PodRef) (s
 	if err != nil {
 		return "", fmt.Errorf("list pod sandbox: %w", err)
 	}
-	for _, sb := range resp.GetItems() {
+	candidates := resp.GetItems()
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].GetCreatedAt() > candidates[j].GetCreatedAt()
+	})
+	for _, sb := range candidates {
 		if pod.GetUid() != "" && sb.GetMetadata().GetUid() != pod.GetUid() {
 			continue
 		}
@@ -110,6 +119,7 @@ func (r *CRIResolver) findWorkloadContainer(ctx context.Context, sandboxID strin
 	}
 	containers := resp.GetContainers()
 	if containerID := pod.GetContainerId(); containerID != "" {
+		containerID = trimRuntimePrefix(containerID)
 		for _, c := range containers {
 			if c.GetId() == containerID {
 				return c.GetId(), nil
@@ -126,6 +136,13 @@ func (r *CRIResolver) findWorkloadContainer(ctx context.Context, sandboxID strin
 		return candidates[i].GetMetadata().GetName() < candidates[j].GetMetadata().GetName()
 	})
 	return candidates[0].GetId(), nil
+}
+
+func trimRuntimePrefix(containerID string) string {
+	if _, id, ok := strings.Cut(containerID, "://"); ok {
+		return id
+	}
+	return containerID
 }
 
 func workloadContainers(containers []*runtimeapi.Container) []*runtimeapi.Container {
