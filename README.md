@@ -4,8 +4,16 @@ Lightweight Kubernetes traffic sniffer: match pods by namespace + regex, run nod
 
 ## Status
 
-Early Phase 1. The shared API and capture spec exist; discovery, agents and the
-capture pipeline do not yet — the CLI is still a stub.
+Phase 1 MVP wire path: discovery, hub scheduling, agent capture, CLI `capture`
+command, PCAP sink, agent image, RBAC manifests, and kind e2e harness.
+
+```bash
+k8s-sniffer capture -n NAMESPACE --pod 'REGEX' -o out.pcapng \
+  --agent-image k8s-sniffer-agent:e2e --allow-mutable-agent-image \
+  --hub-ingest-addr <host-reachable-from-pods>:30551
+```
+
+See [docs/TASKS.md](docs/TASKS.md) for remaining Phase 1 testing (T-TEST.2/3/7).
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — design
 - **[docs/TASKS.md](docs/TASKS.md)** — phased task breakdown + progress checklist

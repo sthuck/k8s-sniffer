@@ -197,12 +197,12 @@ Parallelizable after T1.1:
 - [x] T1.10 Netns resolve — [specs/S2-agent-capture.md](../specs/S2-agent-capture.md)
 - [x] T1.11 tcpdump in netns — [specs/S2-agent-capture.md](../specs/S2-agent-capture.md)
 - [x] T1.12 Frame stream to Hub — [specs/S2-agent-capture.md](../specs/S2-agent-capture.md)
-- [ ] T1.13 PCAP sink
-- [ ] T1.14 CLI capture
-- [ ] T1.15 Agent image
-- [ ] T1.16 RBAC docs/manifests
-- [ ] T1.17 Kind smoke test
-- [ ] T-TEST.1 E2e harness
+- [x] T1.13 PCAP sink — [specs/S2-cli-sink.md](../specs/S2-cli-sink.md)
+- [x] T1.14 CLI capture — [specs/S2-cli-sink.md](../specs/S2-cli-sink.md)
+- [x] T1.15 Agent image — [specs/S2-cli-sink.md](../specs/S2-cli-sink.md)
+- [x] T1.16 RBAC docs/manifests — [specs/S2-cli-sink.md](../specs/S2-cli-sink.md) (`deploy/rbac.yaml`)
+- [x] T1.17 Kind smoke test — [specs/S2-cli-sink.md](../specs/S2-cli-sink.md)
+- [x] T-TEST.1 E2e harness — [specs/S2-cli-sink.md](../specs/S2-cli-sink.md)
 - [ ] T-TEST.2 CI workflows — interim `unit`/`make verify` gate in [`.github/workflows/verify.yml`](../.github/workflows/verify.yml); full unit+integration+e2e still open
 - [ ] T-TEST.3 envtest Hub lifecycle
 - [ ] T-TEST.7 E2e artifacts
