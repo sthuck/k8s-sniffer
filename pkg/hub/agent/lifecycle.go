@@ -284,6 +284,9 @@ func (m *Manager) DeleteSessionAgents(ctx context.Context, sessionID string) err
 	if err != nil {
 		return err
 	}
+	// Short grace lets agents finish publishing before kubelet SIGKILL
+	// (S2-agent-capture stop/drain). envtest has no kubelet — tests must GC
+	// Terminating pods in a fake-kubelet helper, not by setting grace 0 here.
 	grace := int64(5)
 	propagation := metav1.DeletePropagationBackground
 	deleteOpts := metav1.DeleteOptions{

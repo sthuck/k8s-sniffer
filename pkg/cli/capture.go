@@ -137,9 +137,6 @@ func RunCapture(ctx context.Context, opts CaptureOptions) error {
 	if session.GetState() == snifferv1.SessionState_SESSION_STATE_FAILED {
 		return fmt.Errorf("session failed: %s", session.GetFailureReason())
 	}
-	if opts.OnSessionReady != nil {
-		opts.OnSessionReady()
-	}
 
 	subscribeCtx, subscribeCancel := context.WithCancel(context.Background())
 	defer subscribeCancel()
@@ -150,6 +147,8 @@ func RunCapture(ctx context.Context, opts CaptureOptions) error {
 		_ = watchEvents(subscribeCtx, hubClient, sessionID, opts.EventWriter)
 	}()
 
+	// Subscribe before OnSessionReady: WatchTargets withholds assignments until a
+	// packet subscriber exists, so traffic generators must not start earlier.
 	packetErrCh := make(chan error, 1)
 	var packetWG sync.WaitGroup
 	packetWG.Add(1)
@@ -157,6 +156,18 @@ func RunCapture(ctx context.Context, opts CaptureOptions) error {
 		defer packetWG.Done()
 		packetErrCh <- subscribePackets(subscribeCtx, hubClient, sessionID, pcapWriter)
 	}()
+	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
+	err = h.WaitForPacketSubscriber(waitCtx, sessionID)
+	waitCancel()
+	if err != nil {
+		subscribeCancel()
+		packetWG.Wait()
+		return fmt.Errorf("wait for packet subscriber: %w", err)
+	}
+
+	if opts.OnSessionReady != nil {
+		opts.OnSessionReady()
+	}
 
 	stopOnce := sync.Once{}
 	stopSession := func(reason string) {

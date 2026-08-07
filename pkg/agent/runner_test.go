@@ -66,6 +66,53 @@ func TestRunnerSequencesAreUniqueAcrossTargets(t *testing.T) {
 	}
 }
 
+func TestRunnerDeliversFramesBeforeCancel(t *testing.T) {
+	pod := &snifferv1.PodRef{Namespace: "prod", Name: "api", Uid: "uid-1", Node: "node-a"}
+	stream := &fakeCaptureStream{ctx: context.Background()}
+	const packets = 3
+	ready := make(chan struct{})
+	runner := testRunner(t, []*snifferv1.PodRef{pod}, stream, &partialThenBlockCapturer{n: packets, ready: ready})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("timed out waiting for capturer to emit packets")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		stream.mu.Lock()
+		got := 0
+		for _, batch := range stream.batches {
+			got += len(batch.GetRecords())
+		}
+		stream.mu.Unlock()
+		if got >= packets {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatalf("timed out waiting for frames before cancel; got %d", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run error = %v, want cancel or nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run hung after cancel")
+	}
+}
+
 func testRunner(
 	t *testing.T,
 	pods []*snifferv1.PodRef,
@@ -173,6 +220,26 @@ func (*blockingCapturer) Start(ctx context.Context, _ string, _ uint32, _ string
 	reader, writer := io.Pipe()
 	go func() {
 		_, _ = writer.Write(testPCAP(defaultBatchSize))
+		<-ctx.Done()
+		_ = writer.CloseWithError(ctx.Err())
+	}()
+	return reader, nil
+}
+
+// partialThenBlockCapturer emits n packets (below a full batch) then blocks until
+// ctx is cancelled — models short e2e captures ended by session stop.
+type partialThenBlockCapturer struct {
+	n     int
+	ready chan struct{}
+}
+
+func (c *partialThenBlockCapturer) Start(ctx context.Context, _ string, _ uint32, _ string, _ []string) (io.ReadCloser, error) {
+	reader, writer := io.Pipe()
+	go func() {
+		_, _ = writer.Write(testPCAP(c.n))
+		if c.ready != nil {
+			close(c.ready)
+		}
 		<-ctx.Done()
 		_ = writer.CloseWithError(ctx.Err())
 	}()

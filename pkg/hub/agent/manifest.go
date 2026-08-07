@@ -72,10 +72,9 @@ func PodManifest(sessionID, streamID, nodeName string, cfg capture.AgentConfig, 
 	}
 
 	securityContext := agentSecurityContext(cfg)
+	// IfNotPresent for both digest-pinned and AllowMutableImage: kind load /
+	// local tags must not force a registry pull (PullAlways breaks e2e).
 	pullPolicy := corev1.PullIfNotPresent
-	if cfg.AllowMutableImage {
-		pullPolicy = corev1.PullAlways
-	}
 	automountToken := false
 
 	env := []corev1.EnvVar{

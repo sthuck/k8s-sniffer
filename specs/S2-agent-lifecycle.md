@@ -16,7 +16,7 @@ Package: `pkg/hub/agent`.
 | `CreateForNode(ctx, sessionID, node, opts)` | Build manifest + `Pods.Create`; idempotent per `(session, node)` |
 | `WaitReady(ctx, pod)` | Poll until Running with all containers Ready |
 | `ListSessionAgents(ctx, sessionID)` | List by label selector |
-| `DeleteSessionAgents(ctx, sessionID)` | `DeleteCollection` by label (fallback list+delete); grace period 0 |
+| `DeleteSessionAgents(ctx, sessionID)` | `DeleteCollection` by label (fallback list+delete); grace period 5s |
 | `SessionLabelSelector(sessionID)` | `app=k8s-sniffer-agent,sniffer.session=<id>` |
 | `SessionNodeLabelSelector(sessionID, node)` | Session selector + `sniffer.node=<node>` |
 
@@ -32,8 +32,11 @@ Package: `pkg/hub/agent`.
 ## 3. Acceptance / testing
 
 Unit tests cover create, idempotent re-create, wait ready, fast-fail paths, and delete.
-IT1.1-style create/delete integration is exercised in T1.8 `hub_test` (fake clientset).
-Full envtest (T-TEST.3) is a follow-up; T1.7 checkbox is marked done when T1.8 lands.
+IT1.1-style create/delete against the fake clientset lives in T1.8 `hub_test`.
+Full envtest (T-TEST.3 / **IT1.1**) is in [S2-envtest-hub.md](./S2-envtest-hub.md).
+`DeleteSessionAgents` uses grace period **5s** so agents can finish publishing
+before kubelet SIGKILL (aligned with [S2-agent-capture.md](./S2-agent-capture.md)
+stop/drain). envtest GC is handled by a fake-kubelet helper, not by grace 0.
 
 Hub calls `CreateForNode` + `WaitReady` per `NodeGroup`, then records the
 assignment for `WatchTargets`. Cleanup uses `DeleteSessionAgents` from

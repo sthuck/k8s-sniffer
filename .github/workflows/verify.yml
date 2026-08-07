@@ -1,6 +1,4 @@
-# Interim CI gate (pre–T-TEST.2): the `unit` job runs `make verify`
-# (proto-check + vet + go test ./...). Integration and e2e-kind jobs land
-# with T-TEST.2 / T1.17 as separate jobs in this workflow.
+# T-TEST.2 / T-TEST.7: unit + integration (envtest) + kind e2e, with failure artifacts.
 name: verify
 
 on:
@@ -40,3 +38,56 @@ jobs:
 
       - name: Verify
         run: make verify
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Integration (envtest IT1.1)
+        run: make integration-test
+
+  e2e-kind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install kind
+        run: |
+          set -euo pipefail
+          KIND_VERSION=v0.24.0
+          # sha256 of kind-linux-amd64 from the v0.24.0 release assets
+          KIND_SHA256=b89aada5a39d620da3fcd16435b7f28d858927dd53f92cbac77686b0588b600d
+          curl -fsSL -o /tmp/kind-linux-amd64 \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  /tmp/kind-linux-amd64" | sha256sum -c -
+          sudo install -m 0755 /tmp/kind-linux-amd64 /usr/local/bin/kind
+          rm -f /tmp/kind-linux-amd64
+          kind version
+          kubectl version --client
+
+      - name: Kind e2e (E2E1.1)
+        env:
+          K8S_SNIFFER_E2E_ARTIFACT_DIR: ${{ github.workspace }}/test/e2e/artifacts
+        run: |
+          set -euo pipefail
+          ./test/e2e/run.sh all
+
+      - name: Upload e2e failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-kind-artifacts-${{ github.run_id }}
+          path: test/e2e/artifacts/
+          if-no-files-found: warn
+          retention-days: 7

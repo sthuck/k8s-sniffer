@@ -18,7 +18,9 @@ import (
 
 var agentLog = log.WithComponent("agent")
 
-const defaultBatchSize = 32
+// defaultBatchSize is 1 so short sessions (e2e curls) deliver frames before
+// session stop. Larger batches can be reintroduced with an idle flush timer.
+const defaultBatchSize = 1
 
 // RunnerOptions configure capture for one agent incarnation.
 type RunnerOptions struct {
@@ -65,8 +67,6 @@ func (r *Runner) Run(ctx context.Context) error {
 	if r.opts.Tcpdump == nil {
 		return fmt.Errorf("capturer: required")
 	}
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	client, err := r.opts.Dial(ctx, cfg.HubAddr)
 	if err != nil {
@@ -74,7 +74,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 	defer client.Close()
 
-	assignment, err := client.WatchTargets(runCtx, cfg.SessionID, cfg.Node, cfg.AgentPod, cfg.StreamID)
+	assignment, err := client.WatchTargets(ctx, cfg.SessionID, cfg.Node, cfg.AgentPod, cfg.StreamID)
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,14 @@ func (r *Runner) Run(ctx context.Context) error {
 		slog.Int("targets", len(assignment.GetTargets())),
 	)
 
-	stream, err := client.StreamCapture(runCtx, cfg.AgentPod, cfg.StreamID)
+	// Capture stops when ctx is cancelled; the ingest stream stays open until
+	// partial batches are drained so short sessions do not drop frames.
+	captureCtx, captureCancel := context.WithCancel(ctx)
+	defer captureCancel()
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	defer streamCancel()
+
+	stream, err := client.StreamCapture(streamCtx, cfg.AgentPod, cfg.StreamID)
 	if err != nil {
 		return err
 	}
@@ -95,7 +102,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	batchCh := make(chan *snifferv1.CaptureBatch, 8)
 	senderDone := make(chan error, 1)
 	go func() {
-		senderDone <- r.sendBatches(runCtx, stream, batchCh)
+		senderDone <- r.sendBatches(stream, batchCh, captureCancel)
 	}()
 
 	var captureWG sync.WaitGroup
@@ -105,13 +112,20 @@ func (r *Runner) Run(ctx context.Context) error {
 		captureWG.Add(1)
 		go func() {
 			defer captureWG.Done()
-			if err := r.captureTarget(runCtx, assignment, target, batchCh); err != nil &&
-				!errors.Is(err, context.Canceled) {
-				targetErr := fmt.Errorf("target %s/%s: %w", target.GetPod().GetNamespace(), target.GetPod().GetName(), err)
-				captureErrs <- targetErr
-				if ctx.Err() == nil {
-					r.reportCaptureError(context.WithoutCancel(ctx), client, assignment, cfg.AgentPod, target, err)
-				}
+			err := r.captureTarget(captureCtx, assignment, target, batchCh)
+			if err == nil || errors.Is(err, context.Canceled) {
+				return
+			}
+			pod := target.GetPod()
+			agentLog.Info("capture failed",
+				slog.String("session_id", cfg.SessionID),
+				slog.String("namespace", pod.GetNamespace()),
+				slog.String("pod", pod.GetName()),
+				slog.String("err", err.Error()),
+			)
+			captureErrs <- fmt.Errorf("target %s/%s: %w", pod.GetNamespace(), pod.GetName(), err)
+			if ctx.Err() == nil {
+				r.reportCaptureError(context.WithoutCancel(ctx), client, assignment, cfg.AgentPod, target, err)
 			}
 		}()
 	}
@@ -125,9 +139,6 @@ func (r *Runner) Run(ctx context.Context) error {
 	}()
 
 	senderErr := <-senderDone
-	if senderErr != nil {
-		cancel()
-	}
 	<-capturesDone
 	var errs []error
 	for err := range captureErrs {
@@ -148,33 +159,38 @@ func (r *Runner) Run(ctx context.Context) error {
 			)
 		}
 	}
+	streamCancel()
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	return errors.Join(errs...)
 }
 
-func (r *Runner) sendBatches(ctx context.Context, stream snifferv1.AgentIngestService_StreamCaptureClient, batchCh <-chan *snifferv1.CaptureBatch) error {
+func (r *Runner) sendBatches(
+	stream snifferv1.AgentIngestService_StreamCaptureClient,
+	batchCh <-chan *snifferv1.CaptureBatch,
+	onSendErr func(),
+) error {
 	var sequence uint64
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case batch, ok := <-batchCh:
-			if !ok {
-				return nil
+	var sendErr error
+	for batch := range batchCh {
+		if sendErr != nil {
+			continue
+		}
+		for _, record := range batch.GetRecords() {
+			if frame := record.GetWireFrame(); frame != nil {
+				sequence++
+				frame.Sequence = sequence
 			}
-			for _, record := range batch.GetRecords() {
-				if frame := record.GetWireFrame(); frame != nil {
-					sequence++
-					frame.Sequence = sequence
-				}
-			}
-			if err := hubclient.SendBatch(stream, batch); err != nil {
-				return err
+		}
+		if err := hubclient.SendBatch(stream, batch); err != nil {
+			sendErr = err
+			if onSendErr != nil {
+				onSendErr()
 			}
 		}
 	}
+	return sendErr
 }
 
 func (r *Runner) captureTarget(
@@ -184,11 +200,16 @@ func (r *Runner) captureTarget(
 	batchCh chan<- *snifferv1.CaptureBatch,
 ) (returnErr error) {
 	pod := target.GetPod()
+	agentLog.Info("resolving netns",
+		slog.String("session_id", assignment.GetSessionId()),
+		slog.String("namespace", pod.GetNamespace()),
+		slog.String("pod", pod.GetName()),
+	)
 	netnsPath, err := r.opts.Resolver.Resolve(ctx, pod)
 	if err != nil {
 		return newCaptureFailure(snifferv1.ErrorStage_ERROR_STAGE_NETNS_RESOLVE, snifferv1.ErrorReason_ERROR_REASON_NOT_FOUND, err)
 	}
-	agentLog.Debug("resolved netns",
+	agentLog.Info("resolved netns",
 		slog.String("session_id", assignment.GetSessionId()),
 		slog.String("pod", pod.GetName()),
 		slog.String("netns", netnsPath),
@@ -198,6 +219,12 @@ func (r *Runner) captureTarget(
 	if snaplen == 0 {
 		snaplen = 262144
 	}
+	agentLog.Info("starting tcpdump",
+		slog.String("session_id", assignment.GetSessionId()),
+		slog.String("pod", pod.GetName()),
+		slog.String("netns", netnsPath),
+		slog.Uint64("snaplen", uint64(snaplen)),
+	)
 	pcapStream, err := r.opts.Tcpdump.Start(ctx, netnsPath, snaplen, target.GetBpfFilter(), target.GetInterfaces())
 	if err != nil {
 		return newCaptureFailure(snifferv1.ErrorStage_ERROR_STAGE_CAPTURE_START, snifferv1.ErrorReason_ERROR_REASON_TOOL_FAILED, err)
@@ -205,7 +232,10 @@ func (r *Runner) captureTarget(
 	defer func() {
 		closeErr := pcapStream.Close()
 		if ctx.Err() != nil {
-			returnErr = ctx.Err()
+			// Keep a flush/send failure over a plain cancel so callers see it.
+			if returnErr == nil || errors.Is(returnErr, context.Canceled) {
+				returnErr = ctx.Err()
+			}
 			return
 		}
 		if closeErr != nil {
@@ -221,11 +251,35 @@ func (r *Runner) captureTarget(
 	if err != nil {
 		return newCaptureFailure(snifferv1.ErrorStage_ERROR_STAGE_CAPTURE_START, snifferv1.ErrorReason_ERROR_REASON_TOOL_FAILED, err)
 	}
+	agentLog.Info("tcpdump streaming",
+		slog.String("session_id", assignment.GetSessionId()),
+		slog.String("pod", pod.GetName()),
+	)
 
 	batch := &snifferv1.CaptureBatch{
 		SessionId: assignment.GetSessionId(),
 		Node:      assignment.GetNode(),
 		StreamId:  assignment.GetStreamId(),
+	}
+	flush := func() error {
+		if len(batch.Records) == 0 {
+			return nil
+		}
+		// Session stop cancels captureCtx; still deliver the last partial batch
+		// while the ingest stream is kept open by Run.
+		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		n := len(batch.Records)
+		if err := sendBatch(flushCtx, batchCh, cloneBatch(batch)); err != nil {
+			return err
+		}
+		agentLog.Info("flushed capture batch",
+			slog.String("session_id", assignment.GetSessionId()),
+			slog.String("pod", pod.GetName()),
+			slog.Int("records", n),
+		)
+		batch.Records = batch.Records[:0]
+		return nil
 	}
 	for {
 		frame, err := reader.ReadFrame(pod)
@@ -234,6 +288,9 @@ func (r *Runner) captureTarget(
 		}
 		if err != nil {
 			if ctx.Err() != nil {
+				if flushErr := flush(); flushErr != nil {
+					return flushErr
+				}
 				return ctx.Err()
 			}
 			return newCaptureFailure(snifferv1.ErrorStage_ERROR_STAGE_CAPTURE_STREAM, snifferv1.ErrorReason_ERROR_REASON_TOOL_FAILED, err)
@@ -248,12 +305,7 @@ func (r *Runner) captureTarget(
 			batch.Records = batch.Records[:0]
 		}
 	}
-	if len(batch.Records) > 0 {
-		if err := sendBatch(ctx, batchCh, cloneBatch(batch)); err != nil {
-			return err
-		}
-	}
-	return nil
+	return flush()
 }
 
 func validateAssignment(cfg Config, assignment *snifferv1.AgentAssignment) error {
