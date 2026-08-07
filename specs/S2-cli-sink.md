@@ -41,7 +41,9 @@ Flow:
    `--hub-listen` (default `0.0.0.0:ephemeral`).
 3. Auto-detect `--hub-ingest-addr` from `K8S_SNIFFER_HUB_INGEST_HOST` or the
    host's outbound UDP route IP so kind agents can dial the CLI.
-4. `CreateSession` → `SubscribePackets` → `pkg/sink` writer.
+4. `CreateSession` → `SubscribePackets` (wait until registered) → then
+   `OnSessionReady` / traffic may begin. Agents' `WatchTargets` blocks until a
+   packet subscriber exists, so ready must not fire earlier.
 5. `WatchEvents` lines go to stderr (`event: …`).
 6. SIGINT/SIGTERM or `--duration` → `StopSession` → drain → exit.
 

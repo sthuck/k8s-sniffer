@@ -66,7 +66,7 @@ func TestE2E1_1_SmokeCapture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(func() {
 		if t.Failed() && artifactDir != "" {
-			dumpAgentLogs(t, client, artifactDir)
+			dumpAgentLogs(t, client, filepath.Join(artifactDir, "agent-logs-at-end.txt"))
 		}
 		cancel()
 	})
@@ -107,6 +107,10 @@ func TestE2E1_1_SmokeCapture(t *testing.T) {
 		t.Fatalf("capture ended before session ready: %v", err)
 	case <-time.After(2 * time.Minute):
 		t.Fatal("timed out waiting for capture session to become ready")
+	}
+	// Snapshot agent logs while pods still exist (StopSession deletes them).
+	if artifactDir != "" {
+		dumpAgentLogs(t, client, filepath.Join(artifactDir, "agent-logs.txt"))
 	}
 	generateTraffic(t, kubeContext)
 
@@ -178,6 +182,9 @@ func assertPCAPHasPackets(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("read pcap: %v", err)
 	}
+	if len(data) == 0 {
+		t.Fatal("pcapng is empty (no frames received from agents)")
+	}
 	reader, err := pcapgo.NewNgReader(bytes.NewReader(data), pcapgo.DefaultNgReaderOptions)
 	if err != nil {
 		t.Fatalf("pcapng reader: %v", err)
@@ -207,18 +214,18 @@ func assertNoSessionAgents(t *testing.T, client kubernetes.Interface) {
 	}
 }
 
-func dumpAgentLogs(t *testing.T, client kubernetes.Interface, dir string) {
+func dumpAgentLogs(t *testing.T, client kubernetes.Interface, path string) {
 	t.Helper()
 	pods, err := client.CoreV1().Pods(capture.DefaultAgentNamespace).List(context.Background(), metav1.ListOptions{
 		LabelSelector: "app=k8s-sniffer-agent",
 	})
 	if err != nil {
-		_ = os.WriteFile(filepath.Join(dir, "agent-logs-error.txt"), []byte(err.Error()), 0o644)
+		_ = os.WriteFile(path+".error", []byte(err.Error()), 0o644)
 		return
 	}
 	var buf bytes.Buffer
 	if len(pods.Items) == 0 {
-		buf.WriteString("(no agent pods at failure time)\n")
+		buf.WriteString("(no agent pods)\n")
 	}
 	for _, pod := range pods.Items {
 		fmt.Fprintf(&buf, "=== %s/%s phase=%s ===\n", pod.Namespace, pod.Name, pod.Status.Phase)
@@ -232,5 +239,5 @@ func dumpAgentLogs(t *testing.T, client kubernetes.Interface, dir string) {
 		_ = stream.Close()
 		buf.WriteByte('\n')
 	}
-	_ = os.WriteFile(filepath.Join(dir, "agent-logs.txt"), buf.Bytes(), 0o644)
+	_ = os.WriteFile(path, buf.Bytes(), 0o644)
 }

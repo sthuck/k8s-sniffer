@@ -6,10 +6,11 @@
 package hub
 
 import (
+	"context"
+	"fmt"
+	"log/slog"
 	"sync"
 	"time"
-
-	"log/slog"
 
 	"k8s.io/client-go/kubernetes"
 
@@ -41,6 +42,17 @@ type Hub struct {
 	opts     Options
 	agents   *agent.Manager
 	sessions map[string]*sessionState
+}
+
+// WaitForPacketSubscriber blocks until SubscribePackets has registered at least
+// one subscriber for sessionID (or ctx ends). Agents' WatchTargets waits on the
+// same condition before sending assignments.
+func (h *Hub) WaitForPacketSubscriber(ctx context.Context, sessionID string) error {
+	sess, ok := h.getSession(sessionID)
+	if !ok {
+		return fmt.Errorf("session %q not found", sessionID)
+	}
+	return sess.packets.waitForSubscriber(ctx)
 }
 
 // New returns a Hub ready to register on a gRPC server.
