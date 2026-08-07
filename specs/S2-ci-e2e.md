@@ -32,7 +32,14 @@ Triggers, concurrency, and `contents: read` permissions match S0.
 `if-no-files-found: warn` (7-day retention). Kind binary is sha256-verified
 before install (`KIND_SHA256` in the workflow).
 
-## 3. Out of scope
+## 3. Kind image pull
+
+E2E uses `AllowMutableImage` with a tag (`k8s-sniffer-agent:e2e`) after
+`kind load`. Agent manifests use `imagePullPolicy: IfNotPresent` so the node
+uses the loaded image instead of attempting `docker.io/library/...` (which
+fails with `ErrImagePull` under `PullAlways`).
+
+## 4. Out of scope
 
 - k3s nightly (T-TEST.6)
 - `e2e_tls` / multi-node kind (Phase 2+)
