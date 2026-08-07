@@ -26,7 +26,7 @@ Pod with:
 | `spec.restartPolicy` | `Never` |
 | `spec.automountServiceAccountToken` | `false` (agent has no API client) |
 | container `securityContext` | `privileged: true` by default, or scoped capabilities when `Unprivileged` |
-| container `imagePullPolicy` | `IfNotPresent`; `PullAlways` when `AllowMutableImage` |
+| container `imagePullPolicy` | `IfNotPresent` (including `AllowMutableImage` / kind-loaded tags) |
 | CRI socket volume | `hostPath` at `AgentConfig.CRISocketHostPath`, type `Socket`, mounted read-only |
 
 ## 3. Security modes
