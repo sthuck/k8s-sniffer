@@ -105,13 +105,20 @@ func (r *Runner) Run(ctx context.Context) error {
 		captureWG.Add(1)
 		go func() {
 			defer captureWG.Done()
-			if err := r.captureTarget(runCtx, assignment, target, batchCh); err != nil &&
-				!errors.Is(err, context.Canceled) {
-				targetErr := fmt.Errorf("target %s/%s: %w", target.GetPod().GetNamespace(), target.GetPod().GetName(), err)
-				captureErrs <- targetErr
-				if ctx.Err() == nil {
-					r.reportCaptureError(context.WithoutCancel(ctx), client, assignment, cfg.AgentPod, target, err)
-				}
+			err := r.captureTarget(runCtx, assignment, target, batchCh)
+			if err == nil || errors.Is(err, context.Canceled) {
+				return
+			}
+			pod := target.GetPod()
+			agentLog.Info("capture failed",
+				slog.String("session_id", cfg.SessionID),
+				slog.String("namespace", pod.GetNamespace()),
+				slog.String("pod", pod.GetName()),
+				slog.String("err", err.Error()),
+			)
+			captureErrs <- fmt.Errorf("target %s/%s: %w", pod.GetNamespace(), pod.GetName(), err)
+			if ctx.Err() == nil {
+				r.reportCaptureError(context.WithoutCancel(ctx), client, assignment, cfg.AgentPod, target, err)
 			}
 		}()
 	}
@@ -184,11 +191,16 @@ func (r *Runner) captureTarget(
 	batchCh chan<- *snifferv1.CaptureBatch,
 ) (returnErr error) {
 	pod := target.GetPod()
+	agentLog.Info("resolving netns",
+		slog.String("session_id", assignment.GetSessionId()),
+		slog.String("namespace", pod.GetNamespace()),
+		slog.String("pod", pod.GetName()),
+	)
 	netnsPath, err := r.opts.Resolver.Resolve(ctx, pod)
 	if err != nil {
 		return newCaptureFailure(snifferv1.ErrorStage_ERROR_STAGE_NETNS_RESOLVE, snifferv1.ErrorReason_ERROR_REASON_NOT_FOUND, err)
 	}
-	agentLog.Debug("resolved netns",
+	agentLog.Info("resolved netns",
 		slog.String("session_id", assignment.GetSessionId()),
 		slog.String("pod", pod.GetName()),
 		slog.String("netns", netnsPath),
@@ -198,6 +210,12 @@ func (r *Runner) captureTarget(
 	if snaplen == 0 {
 		snaplen = 262144
 	}
+	agentLog.Info("starting tcpdump",
+		slog.String("session_id", assignment.GetSessionId()),
+		slog.String("pod", pod.GetName()),
+		slog.String("netns", netnsPath),
+		slog.Uint64("snaplen", uint64(snaplen)),
+	)
 	pcapStream, err := r.opts.Tcpdump.Start(ctx, netnsPath, snaplen, target.GetBpfFilter(), target.GetInterfaces())
 	if err != nil {
 		return newCaptureFailure(snifferv1.ErrorStage_ERROR_STAGE_CAPTURE_START, snifferv1.ErrorReason_ERROR_REASON_TOOL_FAILED, err)

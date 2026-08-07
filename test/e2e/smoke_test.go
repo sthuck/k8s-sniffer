@@ -78,7 +78,8 @@ func TestE2E1_1_SmokeCapture(t *testing.T) {
 			Spec: capture.Spec{
 				Namespace:   "e2e-fixtures",
 				PodPatterns: []string{`http-echo-.*`},
-				Duration:    30 * time.Second,
+				// No fixed Duration: image pulls for traffic pods can consume most
+				// of a short timer. The test stops the session after curls finish.
 			},
 			Sink: capture.SinkSpec{Out: outPath},
 			Agent: capture.AgentConfig{
@@ -87,6 +88,7 @@ func TestE2E1_1_SmokeCapture(t *testing.T) {
 				CRISocketHostPath: capture.DefaultCRISocketPath,
 				AllowMutableImage: true,
 				HubIngestAddr:     hubIngest,
+				LogLevel:          "debug",
 			},
 			Kube: k8s.ClientConfig{
 				Kubeconfig: kubeconfigPath(),
@@ -108,11 +110,16 @@ func TestE2E1_1_SmokeCapture(t *testing.T) {
 	case <-time.After(2 * time.Minute):
 		t.Fatal("timed out waiting for capture session to become ready")
 	}
+
+	generateTraffic(t, kubeContext)
+	// Give tcpdump / ingest a moment to flush frames before tearing down.
+	time.Sleep(2 * time.Second)
+
 	// Snapshot agent logs while pods still exist (StopSession deletes them).
 	if artifactDir != "" {
 		dumpAgentLogs(t, client, filepath.Join(artifactDir, "agent-logs.txt"))
 	}
-	generateTraffic(t, kubeContext)
+	cancel()
 
 	if err := <-captureDone; err != nil {
 		t.Fatalf("RunCapture: %v", err)

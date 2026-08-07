@@ -60,13 +60,18 @@ clear_artifact_dir() {
   find "$ARTIFACT_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 }
 
+CURL_IMAGE="${CURL_IMAGE:-curlimages/curl:8.8.0}"
+
 cluster_up() {
   ensure_kind
   if ! kind get clusters | grep -qx "$CLUSTER_NAME"; then
     kind create cluster --name "$CLUSTER_NAME" --config "$ROOT/test/e2e/kind.yaml"
   fi
   docker build -t "$AGENT_IMAGE" --target agent "$ROOT"
+  # Preload traffic-generator image so curls during the session do not race a pull.
+  docker pull "$CURL_IMAGE"
   kind load docker-image "$AGENT_IMAGE" --name "$CLUSTER_NAME"
+  kind load docker-image "$CURL_IMAGE" --name "$CLUSTER_NAME"
   kubectl --context "kind-${CLUSTER_NAME}" apply -f "$ROOT/deploy/rbac.yaml"
   kubectl --context "kind-${CLUSTER_NAME}" apply -f "$ROOT/test/e2e/fixtures/http-echo.yaml"
 }

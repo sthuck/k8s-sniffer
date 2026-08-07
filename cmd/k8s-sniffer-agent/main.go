@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/sthuck/k8s-sniffer/pkg/agent"
 	"github.com/sthuck/k8s-sniffer/pkg/agent/capture"
@@ -46,12 +47,15 @@ func main() {
 		os.Exit(2)
 	}
 
-	resolver, err := netns.NewCRIResolver(context.Background(), "unix://"+cfg.CRISocket)
+	criCtx, criCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	resolver, err := netns.NewCRIResolver(criCtx, "unix://"+cfg.CRISocket)
+	criCancel()
 	if err != nil {
 		cliLog.Info("cri resolver init failed", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
 	defer resolver.Close()
+	cliLog.Info("cri resolver ready", slog.String("socket", cfg.CRISocket))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
