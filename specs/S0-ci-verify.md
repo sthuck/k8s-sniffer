@@ -36,8 +36,7 @@ diverge.
 `@actions/*` actions stay on major tags; only third-party actions require SHA
 pins.
 
-## 4. Out of scope (T-TEST.2)
+## 4. Superseded by T-TEST.2
 
-- Separate `integration` job with `-tags=integration` / envtest
-- kind e2e (`./test/e2e/run.sh`)
-- Failure artifact upload (T-TEST.7)
+Full `integration` + `e2e-kind` jobs and failure artifacts:
+[S2-ci-e2e.md](./S2-ci-e2e.md).

@@ -19,9 +19,8 @@ kind: agent Pod objects are created and deleted. This is **IT1.1**.
 | `make setup-envtest` | Installs `setup-envtest` into `./bin` (version-stamped) |
 | `make integration-test` | Downloads kube-apiserver/etcd for `ENVTEST_K8S_VERSION`, sets `KUBEBUILDER_ASSETS`, runs `-tags=integration` |
 
-`make verify` stays unit-only (no envtest binaries). The T-TEST.2 `integration`
-job will run `make integration-test` once that workflow lands
-([S2-ci-e2e.md](./S2-ci-e2e.md)).
+`make verify` stays unit-only (no envtest binaries). The CI `integration` job
+runs `make integration-test` — see [S2-ci-e2e.md](./S2-ci-e2e.md).
 
 ## 3. Behaviour under envtest
 

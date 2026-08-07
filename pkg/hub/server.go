@@ -23,6 +23,10 @@ var errKubernetesRequired = errors.New("kubernetes client: required")
 
 const packetDrainTimeout = 5 * time.Second
 
+// agentFlushGrace matches DeleteSessionAgents' pod termination grace so agents
+// can flush partial capture batches before the packet log closes.
+const agentFlushGrace = 5 * time.Second
+
 func (h *Hub) CreateSession(ctx context.Context, req *snifferv1.CreateSessionRequest) (*snifferv1.CreateSessionResponse, error) {
 	spec := capture.SpecFromProto(req.GetSpec()).WithDefaults()
 	if err := spec.Validate(); err != nil {
@@ -288,6 +292,10 @@ func (h *Hub) stopSession(ctx context.Context, sess *sessionState) (*snifferv1.S
 	if err := h.agents.DeleteSessionAgents(ctx, sessionID); err != nil {
 		return nil, err
 	}
+
+	// Keep the packet log open while agents finish StreamCapture after SIGTERM
+	// (S2-agent-capture). Returns immediately when no ingest stream is active.
+	sess.waitCaptureStreamsIdle(ctx, agentFlushGrace)
 
 	sess.setState(snifferv1.SessionState_SESSION_STATE_STOPPED, "")
 	sess.emitState(sessionID, snifferv1.SessionState_SESSION_STATE_STOPPED)

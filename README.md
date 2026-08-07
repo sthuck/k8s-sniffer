@@ -13,7 +13,7 @@ k8s-sniffer capture -n NAMESPACE --pod 'REGEX' -o out.pcapng \
   --hub-ingest-addr <host-reachable-from-pods>:30551
 ```
 
-See [docs/TASKS.md](docs/TASKS.md) for remaining Phase 1 testing (T-TEST.2/3/7).
+Phase 1 testing complete (T-TEST.2/3/7): unit, envtest integration, and kind e2e in CI.
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — design
 - **[docs/TASKS.md](docs/TASKS.md)** — phased task breakdown + progress checklist

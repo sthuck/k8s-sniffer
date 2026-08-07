@@ -7,6 +7,43 @@ import (
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
+func TestParseCRIEndpoint(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		endpoint    string
+		wantNetwork string
+		wantAddr    string
+		wantErr     string
+	}{
+		{name: "unix uri", endpoint: "unix:///run/containerd/containerd.sock", wantNetwork: "unix", wantAddr: "/run/containerd/containerd.sock"},
+		{name: "bare absolute path", endpoint: "/run/containerd/containerd.sock", wantNetwork: "unix", wantAddr: "/run/containerd/containerd.sock"},
+		{name: "tcp uri", endpoint: "tcp://127.0.0.1:12345", wantNetwork: "tcp", wantAddr: "127.0.0.1:12345"},
+		{name: "bare hostport", endpoint: "127.0.0.1:12345", wantNetwork: "tcp", wantAddr: "127.0.0.1:12345"},
+		{name: "empty", endpoint: "", wantErr: "required"},
+		{name: "bad scheme", endpoint: "http://example", wantErr: "unsupported scheme"},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			network, addr, err := parseCRIEndpoint(tc.endpoint)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("parseCRIEndpoint(%q) = %q %q %v, want err containing %q", tc.endpoint, network, addr, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseCRIEndpoint(%q): %v", tc.endpoint, err)
+			}
+			if network != tc.wantNetwork || addr != tc.wantAddr {
+				t.Fatalf("parseCRIEndpoint(%q) = %q %q, want %q %q", tc.endpoint, network, addr, tc.wantNetwork, tc.wantAddr)
+			}
+		})
+	}
+}
+
 func TestParseContainerPID(t *testing.T) {
 	t.Parallel()
 

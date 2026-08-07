@@ -75,7 +75,7 @@ Goal: `k8s-sniffer capture -n NS --pod REGEX -o out.pcap` works for multiple pod
 | T-TEST.3 | envtest setup for Hub agent lifecycle | M | T1.7 | **IT1.1** passes without kind |
 | T-TEST.7 | E2e failure artifacts (pcap, agent logs, cluster dump) | S | T-TEST.2 | Failed CI uploads artifacts |
 
-**Phase 1 exit:** T1.14 + T1.17 + **E2E1.1** (and ideally E2E1.3) green. TLS explicitly out of scope.
+**Phase 1 exit:** T1.14 + T1.17 + **E2E1.1** + IT1.1 + CI (T-TEST.2/3/7) green. TLS explicitly out of scope. E2E1.3 remains a nice-to-have in the same harness.
 
 ---
 
@@ -203,6 +203,6 @@ Parallelizable after T1.1:
 - [x] T1.16 RBAC docs/manifests — [specs/S2-cli-sink.md](../specs/S2-cli-sink.md) (`deploy/rbac.yaml`)
 - [x] T1.17 Kind smoke test — [specs/S2-cli-sink.md](../specs/S2-cli-sink.md)
 - [x] T-TEST.1 E2e harness — [specs/S2-cli-sink.md](../specs/S2-cli-sink.md)
-- [ ] T-TEST.2 CI workflows — interim `unit`/`make verify` gate in [`.github/workflows/verify.yml`](../.github/workflows/verify.yml); full unit+integration+e2e still open
+- [x] T-TEST.2 CI workflows — [specs/S2-ci-e2e.md](../specs/S2-ci-e2e.md)
 - [x] T-TEST.3 envtest Hub lifecycle — [specs/S2-envtest-hub.md](../specs/S2-envtest-hub.md)
-- [ ] T-TEST.7 E2e artifacts
+- [x] T-TEST.7 E2e artifacts — [specs/S2-ci-e2e.md](../specs/S2-ci-e2e.md)

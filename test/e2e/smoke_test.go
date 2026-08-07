@@ -5,6 +5,8 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -48,9 +51,25 @@ func TestE2E1_1_SmokeCapture(t *testing.T) {
 
 	waitForDeployments(t, client, "e2e-fixtures", "http-echo-a", "http-echo-b")
 
+	artifactDir := os.Getenv("K8S_SNIFFER_E2E_ARTIFACT_DIR")
 	outPath := filepath.Join(t.TempDir(), "capture.pcapng")
+	if artifactDir != "" {
+		if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+			t.Fatalf("artifact dir: %v", err)
+		}
+		outPath = filepath.Join(artifactDir, "capture.pcapng")
+	}
+
+	// Cancel via t.Cleanup (not defer) so failure dumps run *before* StopSession
+	// tears down agent pods. t.Cleanup runs after deferred funcs, so defer cancel
+	// would delete agents before dumpAgentLogs could read them.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
+	t.Cleanup(func() {
+		if t.Failed() && artifactDir != "" {
+			dumpAgentLogs(t, client, filepath.Join(artifactDir, "agent-logs-at-end.txt"))
+		}
+		cancel()
+	})
 
 	sessionReady := make(chan struct{})
 	captureDone := make(chan error, 1)
@@ -59,7 +78,8 @@ func TestE2E1_1_SmokeCapture(t *testing.T) {
 			Spec: capture.Spec{
 				Namespace:   "e2e-fixtures",
 				PodPatterns: []string{`http-echo-.*`},
-				Duration:    30 * time.Second,
+				// No fixed Duration: image pulls for traffic pods can consume most
+				// of a short timer. The test stops the session after curls finish.
 			},
 			Sink: capture.SinkSpec{Out: outPath},
 			Agent: capture.AgentConfig{
@@ -68,6 +88,7 @@ func TestE2E1_1_SmokeCapture(t *testing.T) {
 				CRISocketHostPath: capture.DefaultCRISocketPath,
 				AllowMutableImage: true,
 				HubIngestAddr:     hubIngest,
+				LogLevel:          "debug",
 			},
 			Kube: k8s.ClientConfig{
 				Kubeconfig: kubeconfigPath(),
@@ -84,10 +105,21 @@ func TestE2E1_1_SmokeCapture(t *testing.T) {
 
 	select {
 	case <-sessionReady:
+	case err := <-captureDone:
+		t.Fatalf("capture ended before session ready: %v", err)
 	case <-time.After(2 * time.Minute):
 		t.Fatal("timed out waiting for capture session to become ready")
 	}
+
 	generateTraffic(t, kubeContext)
+	// Give tcpdump / ingest a moment to flush frames before tearing down.
+	time.Sleep(2 * time.Second)
+
+	// Snapshot agent logs while pods still exist (StopSession deletes them).
+	if artifactDir != "" {
+		dumpAgentLogs(t, client, filepath.Join(artifactDir, "agent-logs.txt"))
+	}
+	cancel()
 
 	if err := <-captureDone; err != nil {
 		t.Fatalf("RunCapture: %v", err)
@@ -157,6 +189,9 @@ func assertPCAPHasPackets(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("read pcap: %v", err)
 	}
+	if len(data) == 0 {
+		t.Fatal("pcapng is empty (no frames received from agents)")
+	}
 	reader, err := pcapgo.NewNgReader(bytes.NewReader(data), pcapgo.DefaultNgReaderOptions)
 	if err != nil {
 		t.Fatalf("pcapng reader: %v", err)
@@ -184,4 +219,32 @@ func assertNoSessionAgents(t *testing.T, client kubernetes.Interface) {
 	if len(pods.Items) > 0 {
 		t.Fatalf("expected no agent pods after session stop, found %d", len(pods.Items))
 	}
+}
+
+func dumpAgentLogs(t *testing.T, client kubernetes.Interface, path string) {
+	t.Helper()
+	pods, err := client.CoreV1().Pods(capture.DefaultAgentNamespace).List(context.Background(), metav1.ListOptions{
+		LabelSelector: "app=k8s-sniffer-agent",
+	})
+	if err != nil {
+		_ = os.WriteFile(path+".error", []byte(err.Error()), 0o644)
+		return
+	}
+	var buf bytes.Buffer
+	if len(pods.Items) == 0 {
+		buf.WriteString("(no agent pods)\n")
+	}
+	for _, pod := range pods.Items {
+		fmt.Fprintf(&buf, "=== %s/%s phase=%s ===\n", pod.Namespace, pod.Name, pod.Status.Phase)
+		req := client.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{})
+		stream, err := req.Stream(context.Background())
+		if err != nil {
+			fmt.Fprintf(&buf, "logs error: %v\n", err)
+			continue
+		}
+		_, _ = io.Copy(&buf, stream)
+		_ = stream.Close()
+		buf.WriteByte('\n')
+	}
+	_ = os.WriteFile(path, buf.Bytes(), 0o644)
 }

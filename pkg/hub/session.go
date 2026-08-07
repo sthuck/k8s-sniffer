@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
 	"google.golang.org/protobuf/proto"
@@ -264,6 +265,41 @@ func (s *sessionState) releaseCaptureStream(node, streamID string) {
 	}
 	rec.ingestActive = false
 	s.agents[node] = rec
+}
+
+func (s *sessionState) activeCaptureStreams() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, rec := range s.agents {
+		if rec.ingestActive {
+			n++
+		}
+	}
+	return n
+}
+
+// waitCaptureStreamsIdle waits until agents finish StreamCapture or timeout.
+func (s *sessionState) waitCaptureStreamsIdle(ctx context.Context, timeout time.Duration) {
+	if s.activeCaptureStreams() == 0 {
+		return
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if s.activeCaptureStreams() == 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func validateCaptureRecord(record *snifferv1.CaptureRecord, assignment *snifferv1.AgentAssignment) (int, error) {

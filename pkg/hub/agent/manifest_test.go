@@ -81,8 +81,9 @@ func TestPodManifestMutableImagePullPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PodManifest: %v", err)
 	}
-	if pod.Spec.Containers[0].ImagePullPolicy != corev1.PullAlways {
-		t.Fatalf("pull policy = %q, want PullAlways", pod.Spec.Containers[0].ImagePullPolicy)
+	// Mutable tags still use IfNotPresent so kind-loaded / local images work.
+	if pod.Spec.Containers[0].ImagePullPolicy != corev1.PullIfNotPresent {
+		t.Fatalf("pull policy = %q, want PullIfNotPresent", pod.Spec.Containers[0].ImagePullPolicy)
 	}
 }
 
