@@ -16,6 +16,7 @@ import (
 	"github.com/sthuck/k8s-sniffer/pkg/agent"
 	"github.com/sthuck/k8s-sniffer/pkg/agent/capture"
 	"github.com/sthuck/k8s-sniffer/pkg/agent/netns"
+	"github.com/sthuck/k8s-sniffer/pkg/agent/tlsworker"
 	"github.com/sthuck/k8s-sniffer/pkg/log"
 )
 
@@ -64,6 +65,7 @@ func main() {
 		Config:   cfg,
 		Resolver: resolver,
 		Tcpdump:  &capture.Tcpdump{},
+		TLS:      tlsworker.ECapture{},
 	})
 	if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		cliLog.Info("agent exited with error", slog.String("err", err.Error()))

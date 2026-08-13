@@ -2,7 +2,7 @@
 
 Lightweight Kubernetes traffic capture tool: select pods by namespace + regex, schedule node-local sniffers, stream PCAP (and decrypted TLS where possible) back to the client.
 
-**Status:** planning only — no implementation yet.
+**Status:** Phase 1–3 implemented (wire capture, live multi-pod sessions, TLS plaintext via eCapture / keylog). Phase 4 (standalone Hub) and Phase 5 (UI) are not started.
 
 ---
 
@@ -411,9 +411,9 @@ Architecture, TLS options, component boundaries.
 - Basic stats / drop reporting  
 
 ### Phase 3 — TLS
-- Integrate eBPF TLS worker (`tls=ebpf` / `auto`)  
-- Keylog fallback path  
-- Dual sinks: wire + plaintext  
+- Integrate eBPF TLS worker (`tls=ebpf` / `auto`) — done (eCapture subprocess)
+- Keylog fallback path — done (`--tls keylog` + `--keylog-file`; no workload injection)
+- Dual sinks: wire PCAPng + `--tls-out` JSONL — done (T3.8 synthetic PCAP deferred) 
 
 ### Phase 4 — Hub extraction
 - In-cluster Hub Deployment  
@@ -435,7 +435,7 @@ Each phase should leave the previous CLI UX working.
 2. **Privileged vs fine-grained caps:** start privileged; document hardening path.
 3. **CRI socket path diversity:** containerd vs CRI-O vs Docker — detect or configure.
 4. **TLS plaintext format:** synthetic PCAP vs JSONL events first?  
-   - Recommendation: JSONL events in Phase 3, optional PCAP export after.
+   - **Resolved (Phase 3):** JSONL (`--tls-out`). Synthetic PCAP is T3.8, deferred.
 5. **License/compliance** of vendored binaries (tcpdump, ecapture) in the agent image.
 
 ---

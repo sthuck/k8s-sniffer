@@ -513,8 +513,19 @@ func (h *Hub) ReportStatus(ctx context.Context, req *snifferv1.ReportStatusReque
 		event.Message = "agent state: " + req.GetAgentState().GetPhase().String()
 		event.Payload = &snifferv1.SessionEvent_AgentState{AgentState: req.GetAgentState()}
 	case req.GetTlsState() != nil:
-		event.Message = "agent TLS state: " + req.GetTlsState().GetStatus().String()
-		event.Payload = &snifferv1.SessionEvent_TlsState{TlsState: req.GetTlsState()}
+		tls := req.GetTlsState()
+		podName := ""
+		if tls.GetPod() != nil {
+			podName = tls.GetPod().GetName()
+		}
+		event.Message = fmt.Sprintf("tls %s: %s", podName, tls.GetStatus().String())
+		if tls.GetDetail() != "" {
+			event.Message += " (" + tls.GetDetail() + ")"
+		}
+		if tls.GetStatus() == snifferv1.TlsStatus_TLS_STATUS_DENIED {
+			event.Severity = snifferv1.Severity_SEVERITY_WARNING
+		}
+		event.Payload = &snifferv1.SessionEvent_TlsState{TlsState: tls}
 	default:
 		return nil, status.Error(codes.InvalidArgument, "status payload is required")
 	}

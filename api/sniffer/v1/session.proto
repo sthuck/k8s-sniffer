@@ -7,9 +7,9 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/sthuck/k8s-sniffer/api/sniffer/v1;snifferv1";
 
-// TLS handling requested for a session. Only TLS_MODE_OFF is implemented before
-// Phase 3; other modes are rejected outright rather than silently downgraded to
-// an encrypted-only capture.
+// TLS handling requested for a session. Unspecified is defaulted to AUTO by
+// the hub/CLI (T3.1). Attach failures are non-fatal: wire capture continues
+// and WatchEvents reports per-pod TlsStateChanged.
 enum TlsMode {
   TLS_MODE_UNSPECIFIED = 0;
   TLS_MODE_OFF = 1;
@@ -57,7 +57,7 @@ message CaptureSpec {
   string bpf_filter = 3;
   // Hard stop for the session; zero means "until the client stops it".
   google.protobuf.Duration duration = 4;
-  // Unset means the hub default (TLS_MODE_OFF until T3.1 lands).
+  // Unset means TLS_MODE_AUTO (T3.1).
   TlsMode tls_mode = 5;
   // Per-packet capture length; zero means the agent default.
   uint32 snaplen = 6;

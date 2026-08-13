@@ -19,6 +19,7 @@ import (
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
 	"github.com/sthuck/k8s-sniffer/pkg/agent/netns"
+	"github.com/sthuck/k8s-sniffer/pkg/agent/tlsworker"
 )
 
 func TestRunnerCancelsCapturesWhenSenderFails(t *testing.T) {
@@ -175,6 +176,135 @@ func TestRunnerHotAddsTarget(t *testing.T) {
 	<-done
 }
 
+func TestRunnerEmitsTLSEventsAndContinuesWire(t *testing.T) {
+	pod := &snifferv1.PodRef{Namespace: "prod", Name: "api", Uid: "uid-1", Node: "node-a"}
+	stream := &fakeCaptureStream{ctx: context.Background()}
+	resolver := netns.NewMapResolver()
+	resolver.Set(pod, "/proc/42/ns/net")
+	cfg := Config{
+		SessionID: "session-a",
+		Node:      "node-a",
+		AgentPod:  "agent-a",
+		StreamID:  "stream-a",
+		HubAddr:   "hub:50051",
+		CRISocket: "/run/containerd/containerd.sock",
+	}
+	client := &fakeHubClient{
+		assignment: &snifferv1.AgentAssignment{
+			SessionId: cfg.SessionID,
+			Node:      cfg.Node,
+			StreamId:  cfg.StreamID,
+			Targets: []*snifferv1.Target{{
+				Pod:     pod,
+				Snaplen: 65535,
+				TlsMode: snifferv1.TlsMode_TLS_MODE_AUTO,
+			}},
+		},
+		stream: stream,
+	}
+	tlsEv := &snifferv1.TlsPlaintextEvent{Payload: []byte("e2e-secret-token"), Process: "openssl"}
+	runner := NewRunner(RunnerOptions{
+		Config:   cfg,
+		Resolver: resolver,
+		Tcpdump:  &partialThenBlockCapturer{n: 1, ready: make(chan struct{})},
+		TLS: tlsworker.Fake{
+			Status: tlsworker.Status{Status: snifferv1.TlsStatus_TLS_STATUS_ACTIVE, Detail: "attached"},
+			Events: []*snifferv1.TlsPlaintextEvent{tlsEv},
+		},
+		Dial: func(context.Context, string) (HubClient, error) { return client, nil },
+	})
+	// Use a blocking capturer so the target stays up long enough for TLS events.
+	runner.opts.Tcpdump = &blockingCapturer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var sawTLS, sawWire, sawStatus bool
+	for time.Now().Before(deadline) {
+		stream.mu.Lock()
+		for _, batch := range stream.batches {
+			for _, rec := range batch.GetRecords() {
+				if rec.GetTlsEvent() != nil && string(rec.GetTlsEvent().GetPayload()) == "e2e-secret-token" {
+					sawTLS = true
+				}
+				if rec.GetWireFrame() != nil {
+					sawWire = true
+				}
+			}
+		}
+		stream.mu.Unlock()
+		client.mu.Lock()
+		for _, st := range client.statuses {
+			if st.GetTlsState().GetStatus() == snifferv1.TlsStatus_TLS_STATUS_ACTIVE {
+				sawStatus = true
+			}
+		}
+		client.mu.Unlock()
+		if sawTLS && sawWire && sawStatus {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if !sawTLS || !sawWire || !sawStatus {
+		t.Fatalf("sawTLS=%v sawWire=%v sawStatus=%v", sawTLS, sawWire, sawStatus)
+	}
+}
+
+func TestRunnerTLSUnsupportedKeepsWireCapture(t *testing.T) {
+	pod := &snifferv1.PodRef{Namespace: "prod", Name: "api", Uid: "uid-1", Node: "node-a"}
+	stream := &fakeCaptureStream{ctx: context.Background()}
+	resolver := netns.NewMapResolver()
+	resolver.Set(pod, "/proc/1/ns/net")
+	cfg := Config{
+		SessionID: "session-a",
+		Node:      "node-a",
+		AgentPod:  "agent-a",
+		StreamID:  "stream-a",
+		HubAddr:   "hub:50051",
+		CRISocket: "/run/containerd/containerd.sock",
+	}
+	client := &fakeHubClient{
+		assignment: &snifferv1.AgentAssignment{
+			SessionId: cfg.SessionID,
+			Node:      cfg.Node,
+			StreamId:  cfg.StreamID,
+			Targets: []*snifferv1.Target{{
+				Pod:     pod,
+				Snaplen: 65535,
+				TlsMode: snifferv1.TlsMode_TLS_MODE_AUTO,
+			}},
+		},
+		stream: stream,
+	}
+	ready := make(chan struct{})
+	runner := NewRunner(RunnerOptions{
+		Config:   cfg,
+		Resolver: resolver,
+		Tcpdump:  &partialThenBlockCapturer{n: 1, ready: ready},
+		TLS: tlsworker.Fake{
+			Status: tlsworker.Status{Status: snifferv1.TlsStatus_TLS_STATUS_UNSUPPORTED, Detail: "no libssl"},
+		},
+		Dial: func(context.Context, string) (HubClient, error) { return client, nil },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("wire capturer did not start")
+	}
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want cancel or nil", err)
+	}
+}
+
 func waitUntilCaptures(t *testing.T, c *countingCapturer, n int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -252,6 +382,8 @@ type fakeHubClient struct {
 	assignment *snifferv1.AgentAssignment
 	updates    <-chan *snifferv1.AgentAssignment
 	stream     snifferv1.AgentIngestService_StreamCaptureClient
+	mu         sync.Mutex
+	statuses   []*snifferv1.ReportStatusRequest
 }
 
 func (c *fakeHubClient) WatchTargets(ctx context.Context, _ string, _ string, _ string, _ string) (AssignmentWatcher, error) {
@@ -262,7 +394,10 @@ func (c *fakeHubClient) StreamCapture(context.Context, string, string) (snifferv
 	return c.stream, nil
 }
 
-func (c *fakeHubClient) ReportStatus(context.Context, *snifferv1.ReportStatusRequest, string) error {
+func (c *fakeHubClient) ReportStatus(_ context.Context, req *snifferv1.ReportStatusRequest, _ string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.statuses = append(c.statuses, proto.Clone(req).(*snifferv1.ReportStatusRequest))
 	return nil
 }
 

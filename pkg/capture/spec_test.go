@@ -88,9 +88,16 @@ func TestSpecValidate(t *testing.T) {
 			wantErr: "tls mode: unknown value 42",
 		},
 		{
-			name:    "tls mode not implemented yet",
-			mutate:  func(s *Spec) { s.TLSMode = TLSModeAuto },
-			wantErr: "tls mode: auto is not implemented yet",
+			name:   "tls auto is implemented",
+			mutate: func(s *Spec) { s.TLSMode = TLSModeAuto },
+		},
+		{
+			name:   "tls ebpf is implemented",
+			mutate: func(s *Spec) { s.TLSMode = TLSModeEBPF },
+		},
+		{
+			name:   "tls keylog is implemented",
+			mutate: func(s *Spec) { s.TLSMode = TLSModeKeylog },
 		},
 	}
 
@@ -149,8 +156,8 @@ func TestSpecWithDefaults(t *testing.T) {
 	if got.Snaplen != DefaultSnaplen {
 		t.Errorf("Snaplen = %d, want %d", got.Snaplen, DefaultSnaplen)
 	}
-	if got.TLSMode != TLSModeOff {
-		t.Errorf("TLSMode = %s, want off", got.TLSMode)
+	if got.TLSMode != DefaultTLSMode {
+		t.Errorf("TLSMode = %s, want %s", got.TLSMode, DefaultTLSMode)
 	}
 }
 
@@ -225,8 +232,15 @@ func TestTLSMode(t *testing.T) {
 	if !TLSModeOff.Implemented() {
 		t.Error("off must be implemented")
 	}
-	if TLSModeAuto.Implemented() {
-		t.Error("auto must not report itself implemented before T3.1")
+	if !TLSModeAuto.Implemented() || !TLSModeEBPF.Implemented() || !TLSModeKeylog.Implemented() {
+		t.Error("auto, ebpf and keylog must be implemented (T3.1)")
+	}
+	if !TLSModeAuto.WantsEBPF() || !TLSModeEBPF.WantsEBPF() || TLSModeKeylog.WantsEBPF() || TLSModeOff.WantsEBPF() {
+		t.Error("WantsEBPF() mismatch")
+	}
+	got, err := ParseTLSMode("AUTO")
+	if err != nil || got != TLSModeAuto {
+		t.Errorf("ParseTLSMode(AUTO) = %s, %v, want auto", got, err)
 	}
 }
 
@@ -247,6 +261,15 @@ func TestSinkSpec(t *testing.T) {
 	}
 	if got := file.WithDefaults(); got.Out != "session.pcapng" {
 		t.Errorf("WithDefaults() overwrote Out: %q", got.Out)
+	}
+	if err := (SinkSpec{Out: "a.pcapng", TLSOut: "-"}).Validate(); err == nil {
+		t.Error("tls-out '-' should be rejected")
+	}
+	if err := (SinkSpec{Out: "same.jsonl", TLSOut: "same.jsonl"}).Validate(); err == nil {
+		t.Error("tls-out equal to out should be rejected")
+	}
+	if err := (SinkSpec{Out: "a.pcapng", TLSOut: "a.jsonl"}).Validate(); err != nil {
+		t.Errorf("valid tls-out rejected: %v", err)
 	}
 }
 

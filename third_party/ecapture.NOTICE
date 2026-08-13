@@ -1,0 +1,13 @@
+eCapture (https://github.com/gojue/ecapture)
+
+The k8s-sniffer agent image vendors a pinned eCapture release binary
+(currently v2.4.1) to capture TLS plaintext via eBPF uprobes.
+
+License: Apache License 2.0
+https://github.com/gojue/ecapture/blob/master/LICENSE
+
+Copyright 2022 CFC4N <cfc4n.cs@gmail.com> and eCapture contributors.
+
+The Apache-2.0 license text is included with the eCapture source repository.
+This NOTICE exists so operators can see which third-party binary is shipped
+in the privileged agent image (T3.2).

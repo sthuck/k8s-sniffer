@@ -122,11 +122,10 @@ func (Direction) EnumDescriptor() ([]byte, []int) {
 	return file_sniffer_v1_record_proto_rawDescGZIP(), []int{1}
 }
 
-// Decrypted payload captured by the TLS worker. Reserved for T3.4/T3.5: Phase 1
-// agents never emit it. It carries what a packet frame cannot model -- crypto
-// boundary direction, process and connection identity, which TLS stack was
-// hooked -- which is why plaintext is a distinct record type rather than a
-// synthetic packet.
+// Decrypted payload captured by the TLS worker (T3.4 / T3.5). It carries what
+// a packet frame cannot model -- crypto boundary direction, process and
+// connection identity, which TLS stack was hooked -- which is why plaintext
+// is a distinct record type rather than a synthetic packet.
 type TlsPlaintextEvent struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

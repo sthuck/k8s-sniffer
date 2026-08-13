@@ -76,11 +76,13 @@ jobs:
           kind version
           kubectl version --client
 
-      - name: Kind e2e (E2E1.1, E2E2.1, E2E2.3)
+      - name: Kind e2e (E2E1.1, E2E2.*, E2E3.2–E2E3.4)
         env:
           K8S_SNIFFER_E2E_ARTIFACT_DIR: ${{ github.workspace }}/test/e2e/artifacts
         run: |
           set -euo pipefail
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tshark
           ./test/e2e/run.sh all
 
       - name: Upload e2e failure artifacts
@@ -88,6 +90,47 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-kind-artifacts-${{ github.run_id }}
+          path: test/e2e/artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+
+  e2e-kind-tls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install kind
+        run: |
+          set -euo pipefail
+          KIND_VERSION=v0.24.0
+          KIND_SHA256=b89aada5a39d620da3fcd16435b7f28d858927dd53f92cbac77686b0588b600d
+          curl -fsSL -o /tmp/kind-linux-amd64 \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  /tmp/kind-linux-amd64" | sha256sum -c -
+          sudo install -m 0755 /tmp/kind-linux-amd64 /usr/local/bin/kind
+          rm -f /tmp/kind-linux-amd64
+          kind version
+          kubectl version --client
+
+      - name: Kind TLS e2e (E2E3.1)
+        env:
+          K8S_SNIFFER_E2E_ARTIFACT_DIR: ${{ github.workspace }}/test/e2e/artifacts
+          E2E_GO_TAGS: e2e,e2e_tls
+          E2E_GO_RUN: TestE2E3_
+        run: |
+          set -euo pipefail
+          ./test/e2e/run.sh all
+
+      - name: Upload TLS e2e failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-kind-tls-artifacts-${{ github.run_id }}
           path: test/e2e/artifacts/
           if-no-files-found: warn
           retention-days: 7

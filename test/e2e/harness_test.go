@@ -134,13 +134,37 @@ type runningCapture struct {
 	ready        <-chan struct{}
 	events       *eventBuffer
 	outPath      string
+	tlsOutPath   string
 	client       kubernetes.Interface
 	artifactName string
 }
 
+type captureSettings struct {
+	namespace  string
+	podPattern string
+	outName    string
+	tlsMode    capture.TLSMode
+	tlsOutName string
+	keylogFile string
+}
+
 func (e *e2eEnv) startCapture(namespace, podPattern, outName string) *runningCapture {
 	e.t.Helper()
-	outPath := e.captureOutPath(outName)
+	return e.startCaptureWith(captureSettings{
+		namespace:  namespace,
+		podPattern: podPattern,
+		outName:    outName,
+		tlsMode:    capture.TLSModeOff,
+	})
+}
+
+func (e *e2eEnv) startCaptureWith(opts captureSettings) *runningCapture {
+	e.t.Helper()
+	outPath := e.captureOutPath(opts.outName)
+	tlsOut := ""
+	if opts.tlsOutName != "" {
+		tlsOut = e.captureOutPath(opts.tlsOutName)
+	}
 	events := &eventBuffer{}
 	ctx, cancel := context.WithTimeout(context.Background(), e2eTimeout)
 	ready := make(chan struct{})
@@ -152,13 +176,19 @@ func (e *e2eEnv) startCapture(namespace, podPattern, outName string) *runningCap
 		ready:        ready,
 		events:       events,
 		outPath:      outPath,
+		tlsOutPath:   tlsOut,
 		client:       e.client,
-		artifactName: strings.TrimSuffix(outName, filepath.Ext(outName)),
+		artifactName: strings.TrimSuffix(opts.outName, filepath.Ext(opts.outName)),
 	}
 	e.t.Cleanup(func() {
 		if e.t.Failed() && e.artifactDir != "" {
 			dumpAgentLogs(e.t, e.client, filepath.Join(e.artifactDir, rc.artifactName+"-agent-logs-at-end.txt"))
 			_ = os.WriteFile(filepath.Join(e.artifactDir, rc.artifactName+"-events.txt"), []byte(events.String()), 0o644)
+			if tlsOut != "" {
+				if data, err := os.ReadFile(tlsOut); err == nil {
+					_ = os.WriteFile(filepath.Join(e.artifactDir, opts.tlsOutName), data, 0o644)
+				}
+			}
 		}
 		cancel()
 	})
@@ -166,10 +196,11 @@ func (e *e2eEnv) startCapture(namespace, podPattern, outName string) *runningCap
 	go func() {
 		done <- cli.RunCapture(ctx, cli.CaptureOptions{
 			Spec: capture.Spec{
-				Namespace:   namespace,
-				PodPatterns: []string{podPattern},
+				Namespace:   opts.namespace,
+				PodPatterns: []string{opts.podPattern},
+				TLSMode:     opts.tlsMode,
 			},
-			Sink: capture.SinkSpec{Out: outPath},
+			Sink: capture.SinkSpec{Out: outPath, TLSOut: tlsOut, KeylogFile: opts.keylogFile},
 			Agent: capture.AgentConfig{
 				Namespace:         capture.DefaultAgentNamespace,
 				Image:             e.agentImage,

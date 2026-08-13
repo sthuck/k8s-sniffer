@@ -218,3 +218,16 @@ Parallelizable after T1.1:
 - [x] T2.7 Session stats events — [specs/S2-phase2.md](../specs/S2-phase2.md)
 - [ ] T2.8 `--duration` hard stop — **deferred** (CLI already stops after duration; no extra e2e)
 - [x] T-TEST.4 2-node kind + e2e helpers — [specs/S2-phase2.md](../specs/S2-phase2.md)
+
+### Phase 3 checklist
+
+- [x] T3.1 TLS mode flags (`off` / `ebpf` / `keylog` / `auto`, default `auto`) — [specs/S3-tls.md](../specs/S3-tls.md)
+- [x] T3.2 Vendor/pin ecapture in agent image — [specs/S3-tls.md](../specs/S3-tls.md)
+- [x] T3.3 Agent TLS worker supervisor — [specs/S3-tls.md](../specs/S3-tls.md)
+- [x] T3.4 Multiplex `TlsPlaintextEvent` with wire frames — [specs/S3-tls.md](../specs/S3-tls.md)
+- [x] T3.5 JSONL `--tls-out` sink — [specs/S3-tls.md](../specs/S3-tls.md)
+- [x] T3.6 Per-pod TLS status events — [specs/S3-tls.md](../specs/S3-tls.md)
+- [x] T3.7 `--keylog-file` + SSLKEYLOGFILE docs (no workload mutation) — [docs/TLS.md](./TLS.md)
+- [ ] T3.8 Synthetic PCAP from TLS events — **deferred** (JSONL is the plaintext sink)
+- [x] T3.9 Kind TLS e2e (E2E3.1 under `e2e_tls`) — [specs/S3-tls.md](../specs/S3-tls.md)
+- [x] T-TEST.5 HTTPS/OpenSSL fixture + `e2e_tls` tag — [specs/S3-tls.md](../specs/S3-tls.md)

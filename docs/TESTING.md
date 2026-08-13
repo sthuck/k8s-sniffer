@@ -74,8 +74,8 @@ CI shape (evolve over phases):
 |-----|------|---------|--------|
 | `unit` | every PR + push to `main` | `make verify` (proto-check, vet, `go test ./...`) | Live in [`.github/workflows/verify.yml`](../.github/workflows/verify.yml) |
 | `integration` | every PR | `make integration-test` (envtest IT1.1) | Live (T-TEST.2 / T-TEST.3) |
-| `e2e-kind` | every PR | `./test/e2e/run.sh` (E2E1.1 + E2E2.1/2.3/2.6); uploads artifacts on failure | Live (T-TEST.2 / T-TEST.7 / T-TEST.4) |
-| `e2e-kind-tls` | every PR after T3.9 (or nightly if flaky) | `./test/e2e/run.sh kind -tags e2e_tls` | Planned |
+| `e2e-kind` | every PR | `./test/e2e/run.sh` (E2E1.1 + E2E2.* + E2E3.2–3.4); uploads artifacts on failure | Live (T-TEST.2 / T-TEST.7 / T-TEST.4 / T3) |
+| `e2e-kind-tls` | every PR (E2E3.1) | `E2E_GO_TAGS=e2e,e2e_tls E2E_GO_RUN=TestE2E3_ ./test/e2e/run.sh all` | Required on ubuntu-latest kind (BTF). Document skip only if runners lack BPF. |
 | `e2e-k3s` | nightly / manual | `./test/e2e/run.sh k3s` | Planned |
 
 CI installs `protoc` at `PROTOC_VERSION` from the Makefile (same pin as local regen). Kind is pinned to v0.24.0 in the workflow.
@@ -148,12 +148,12 @@ TLS e2e is flakier (kernel, privileges, library match). Isolate with `e2e_tls` t
 | **E2E3.3** | kind | T3.7 | Keylog mode: provide keylog + wire pcap; `tshark` decrypts Host/path or known string |
 | **E2E3.4** | kind | T3.1 | `--tls=off` produces no TLS plaintext file even if worker present |
 
-**Fixtures to add in Phase 3**
+**Fixtures (Phase 3)**
 
-- `fixtures/https-openssl` — dynamically linked OpenSSL server + client with predictable body (`e2e-secret-token`)
+- Dynamic HTTPS OpenSSL/nginx fixture in `test/e2e/https_fixture_test.go` (self-signed cert, body/path `e2e-secret-token`)
 - Optional: Go `crypto/tls` app for a second stack later
 
-**Phase 3 CI:** `E2E3.1` required if runners allow privileged BPF; otherwise nightly + document skip. Never skip wire e2e because TLS failed.
+**Phase 3 CI:** `E2E3.1` is the `e2e-kind-tls` job. E2E3.2–E2E3.4 run in `e2e-kind`. Never skip wire e2e because TLS failed.
 
 ---
 
