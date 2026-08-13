@@ -87,6 +87,38 @@ func TestManagerCreateForNode(t *testing.T) {
 	}
 }
 
+func TestCreateForNodeReplacesFailedPod(t *testing.T) {
+	client := newTestClient()
+	mgr := NewManager(client, testAgentConfig())
+
+	first, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", testCreateOptions)
+	if err != nil {
+		t.Fatalf("first CreateForNode: %v", err)
+	}
+	first.Status.Phase = corev1.PodFailed
+	if _, err := client.CoreV1().Pods(cfgNamespace()).Update(context.Background(), first, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+
+	second, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", CreateOptions{StreamID: "stream-2"})
+	if err != nil {
+		t.Fatalf("replace CreateForNode: %v", err)
+	}
+	if second.Name == first.Name {
+		t.Fatal("expected a new agent pod after failed predecessor")
+	}
+	agents, err := mgr.ListSessionAgents(context.Background(), "sess-1")
+	if err != nil {
+		t.Fatalf("ListSessionAgents: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("listed %d agents, want 1", len(agents))
+	}
+	if agents[0].Name != second.Name {
+		t.Fatalf("remaining agent = %q, want %q", agents[0].Name, second.Name)
+	}
+}
+
 func TestCreateForNodeIdempotentPerNode(t *testing.T) {
 	client := newTestClient()
 	mgr := NewManager(client, testAgentConfig())
@@ -236,6 +268,29 @@ func TestManagerDeleteSessionAgents(t *testing.T) {
 
 	if err := mgr.DeleteSessionAgents(context.Background(), "sess-1"); err != nil {
 		t.Fatalf("second DeleteSessionAgents: %v", err)
+	}
+}
+
+func TestManagerDeleteAgentOnNode(t *testing.T) {
+	client := newTestClient()
+	mgr := NewManager(client, testAgentConfig())
+	for _, node := range []string{"node-a", "node-b"} {
+		if _, err := mgr.CreateForNode(context.Background(), "sess-1", node, testCreateOptions); err != nil {
+			t.Fatalf("CreateForNode(%s): %v", node, err)
+		}
+	}
+	if err := mgr.DeleteAgentOnNode(context.Background(), "sess-1", "node-b"); err != nil {
+		t.Fatalf("DeleteAgentOnNode: %v", err)
+	}
+	remaining, err := mgr.ListSessionAgents(context.Background(), "sess-1")
+	if err != nil {
+		t.Fatalf("ListSessionAgents: %v", err)
+	}
+	if len(remaining) != 1 {
+		t.Fatalf("%d agents remain, want 1", len(remaining))
+	}
+	if remaining[0].Spec.NodeName != "node-a" {
+		t.Fatalf("remaining node = %q, want node-a", remaining[0].Spec.NodeName)
 	}
 }
 

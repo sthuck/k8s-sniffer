@@ -86,6 +86,16 @@ func TestListMatchingPods(t *testing.T) {
 			Spec:       corev1.PodSpec{NodeName: "node-a"},
 			Status:     corev1.PodStatus{Phase: corev1.PodPending},
 		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "payments-terminating",
+				Namespace:         "prod",
+				UID:               "uid-6",
+				DeletionTimestamp: &metav1.Time{Time: metav1.Now().Time},
+			},
+			Spec:   corev1.PodSpec{NodeName: "node-a"},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		},
 	)
 
 	got, err := ListMatchingPods(context.Background(), client, "prod", matcher)

@@ -46,5 +46,5 @@ to the runner default route, which agents cannot reach.
 ## 4. Out of scope
 
 - k3s nightly (T-TEST.6)
-- `e2e_tls` / multi-node kind (Phase 2+)
-- Flake retries (optional later)
+- `e2e_tls` (Phase 3)
+- T2.4 BPF filter e2e / T2.6 split-per-pod / T2.8 duration e2e (deferred)

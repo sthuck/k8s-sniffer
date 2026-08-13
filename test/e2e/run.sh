@@ -61,17 +61,31 @@ clear_artifact_dir() {
 }
 
 CURL_IMAGE="${CURL_IMAGE:-curlimages/curl:8.8.0}"
+ECHO_IMAGE="${ECHO_IMAGE:-hashicorp/http-echo:1.0}"
+
+cluster_node_count() {
+  kind get nodes --name "$CLUSTER_NAME" 2>/dev/null | wc -l
+}
 
 cluster_up() {
   ensure_kind
+  if kind get clusters | grep -qx "$CLUSTER_NAME"; then
+    # T-TEST.4 requires 2 nodes; recreate leftover 1-node clusters from Phase 1.
+    if [[ "$(cluster_node_count)" -lt 2 ]]; then
+      echo "existing cluster ${CLUSTER_NAME} has $(cluster_node_count) node(s); recreating with 2-node config" >&2
+      kind delete cluster --name "$CLUSTER_NAME"
+    fi
+  fi
   if ! kind get clusters | grep -qx "$CLUSTER_NAME"; then
     kind create cluster --name "$CLUSTER_NAME" --config "$ROOT/test/e2e/kind.yaml"
   fi
   docker build -t "$AGENT_IMAGE" --target agent "$ROOT"
-  # Preload traffic-generator image so curls during the session do not race a pull.
+  # Preload traffic-generator and echo images so mid-session pods/curls do not race a pull.
   docker pull "$CURL_IMAGE"
+  docker pull "$ECHO_IMAGE"
   kind load docker-image "$AGENT_IMAGE" --name "$CLUSTER_NAME"
   kind load docker-image "$CURL_IMAGE" --name "$CLUSTER_NAME"
+  kind load docker-image "$ECHO_IMAGE" --name "$CLUSTER_NAME"
   kubectl --context "kind-${CLUSTER_NAME}" apply -f "$ROOT/deploy/rbac.yaml"
   kubectl --context "kind-${CLUSTER_NAME}" apply -f "$ROOT/test/e2e/fixtures/http-echo.yaml"
 }
@@ -122,7 +136,7 @@ run_tests() {
   export K8S_SNIFFER_E2E_HUB_INGEST_ADDR="$hub_addr"
   export K8S_SNIFFER_E2E_ARTIFACT_DIR="$ARTIFACT_DIR"
   clear_artifact_dir
-  if ! (cd "$ROOT" && go test -tags=e2e -count=1 -timeout=15m ./test/e2e/...); then
+  if ! (cd "$ROOT" && go test -tags=e2e -count=1 -timeout=25m ./test/e2e/...); then
     dump_failure_artifacts
     return 1
   fi

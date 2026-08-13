@@ -18,13 +18,14 @@ import (
 
 // PCAPWriter serializes wire PacketFrames to PCAP or PCAPng.
 type PCAPWriter struct {
-	path   string
-	file   *os.File
-	writer io.Writer
-	ng     *pcapgo.NgWriter
+	path    string
+	file    *os.File
+	writer  io.Writer
+	ng      *pcapgo.NgWriter
 	classic *pcapgo.Writer
-	mu     sync.Mutex
-	count  uint64
+	ifaces  map[string]int
+	mu      sync.Mutex
+	count   uint64
 }
 
 // OpenPCAP creates a PCAP writer for path (or stdout when path is "-").
@@ -32,7 +33,7 @@ func OpenPCAP(path string) (*PCAPWriter, error) {
 	if path == "" {
 		return nil, fmt.Errorf("pcap path: required")
 	}
-	w := &PCAPWriter{path: path}
+	w := &PCAPWriter{path: path, ifaces: make(map[string]int)}
 	if err := w.open(); err != nil {
 		return nil, err
 	}
@@ -90,20 +91,24 @@ func (w *PCAPWriter) WriteFrame(frame *snifferv1.PacketFrame) error {
 	}
 
 	linkType := linkTypeToDLT(frame.GetLinkType())
-	if w.ng == nil && w.classic == nil {
-		if err := w.initWriter(linkType); err != nil {
+	if w.usePCAPng() {
+		idx, err := w.ensureInterface(frame.GetPod(), linkType)
+		if err != nil {
 			return err
 		}
-	}
-
-	var err error
-	if w.ng != nil {
-		err = w.ng.WritePacket(ci, frame.GetPayload())
+		ci.InterfaceIndex = idx
+		if err := w.ng.WritePacket(ci, frame.GetPayload()); err != nil {
+			return fmt.Errorf("write pcap packet: %w", err)
+		}
 	} else {
-		err = w.classic.WritePacket(ci, frame.GetPayload())
-	}
-	if err != nil {
-		return fmt.Errorf("write pcap packet: %w", err)
+		if w.classic == nil {
+			if err := w.initClassic(linkType); err != nil {
+				return err
+			}
+		}
+		if err := w.classic.WritePacket(ci, frame.GetPayload()); err != nil {
+			return fmt.Errorf("write pcap packet: %w", err)
+		}
 	}
 	w.count++
 	return nil
@@ -120,20 +125,77 @@ func (w *PCAPWriter) WriteRecord(rec *snifferv1.CaptureRecord) error {
 	return nil
 }
 
-func (w *PCAPWriter) initWriter(linkType layers.LinkType) error {
-	if w.usePCAPng() {
-		ng, err := pcapgo.NewNgWriter(w.writer, linkType)
-		if err != nil {
-			return fmt.Errorf("pcapng writer: %w", err)
-		}
-		w.ng = ng
-		return nil
-	}
+func (w *PCAPWriter) initClassic(linkType layers.LinkType) error {
 	w.classic = pcapgo.NewWriter(w.writer)
 	if err := w.classic.WriteFileHeader(65535, linkType); err != nil {
 		return fmt.Errorf("pcap header: %w", err)
 	}
 	return nil
+}
+
+func (w *PCAPWriter) ensureInterface(pod *snifferv1.PodRef, linkType layers.LinkType) (int, error) {
+	key := interfaceKey(pod)
+	if id, ok := w.ifaces[key]; ok {
+		return id, nil
+	}
+	intf := pcapgo.NgInterface{
+		Name:                InterfaceName(pod),
+		Comment:             MetadataComment(pod),
+		Description:         MetadataComment(pod),
+		LinkType:            linkType,
+		SnapLength:          0,
+		TimestampResolution: 9,
+	}
+	if w.ng == nil {
+		ng, err := pcapgo.NewNgWriterInterface(w.writer, intf, pcapgo.NgWriterOptions{
+			SectionInfo: pcapgo.NgSectionInfo{
+				Application: "k8s-sniffer",
+				Comment:     "k8s-sniffer wire capture",
+			},
+		})
+		if err != nil {
+			return 0, fmt.Errorf("pcapng writer: %w", err)
+		}
+		w.ng = ng
+		w.ifaces[key] = 0
+		return 0, nil
+	}
+	id, err := w.ng.AddInterface(intf)
+	if err != nil {
+		return 0, fmt.Errorf("pcapng interface: %w", err)
+	}
+	w.ifaces[key] = id
+	return id, nil
+}
+
+func interfaceKey(pod *snifferv1.PodRef) string {
+	if pod == nil {
+		return ""
+	}
+	if pod.GetUid() != "" {
+		return pod.GetUid()
+	}
+	return pod.GetNamespace() + "/" + pod.GetName()
+}
+
+// InterfaceName is the PCAPng IDB name for a capture target.
+func InterfaceName(pod *snifferv1.PodRef) string {
+	if pod == nil || (pod.GetNamespace() == "" && pod.GetName() == "") {
+		return "k8s-sniffer"
+	}
+	if pod.GetNamespace() == "" {
+		return pod.GetName()
+	}
+	return pod.GetNamespace() + "/" + pod.GetName()
+}
+
+// MetadataComment is the PCAPng IDB comment carrying k8s identity.
+func MetadataComment(pod *snifferv1.PodRef) string {
+	if pod == nil {
+		return "k8s.pod= k8s.namespace= k8s.node="
+	}
+	return fmt.Sprintf("k8s.pod=%s k8s.namespace=%s k8s.node=%s",
+		pod.GetName(), pod.GetNamespace(), pod.GetNode())
 }
 
 // PacketCount returns the number of frames written.

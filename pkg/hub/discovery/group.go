@@ -58,7 +58,7 @@ func GroupMatchingPods(pods []corev1.Pod, matcher *PodMatcher) (groups []NodeGro
 	matched := make([]corev1.Pod, 0, len(pods))
 	for i := range pods {
 		pod := pods[i]
-		if !IsRunning(&pod) || !matcher.MatchName(pod.Name) {
+		if !IsRunning(&pod) || pod.DeletionTimestamp != nil || !matcher.MatchName(pod.Name) {
 			continue
 		}
 		matched = append(matched, pod)

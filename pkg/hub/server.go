@@ -15,7 +15,6 @@ import (
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
 	"github.com/sthuck/k8s-sniffer/pkg/capture"
-	"github.com/sthuck/k8s-sniffer/pkg/hub/agent"
 	"github.com/sthuck/k8s-sniffer/pkg/hub/discovery"
 )
 
@@ -62,6 +61,8 @@ func (h *Hub) CreateSession(ctx context.Context, req *snifferv1.CreateSessionReq
 		failed := h.failSession(ctx, sess, err)
 		return &snifferv1.CreateSessionResponse{Session: failed}, nil
 	}
+
+	h.startLiveFollow(sess, spec)
 
 	hubLog.Info("session create completed",
 		slog.String("session_id", sessionID),
@@ -151,73 +152,19 @@ func (h *Hub) startSession(ctx context.Context, sess *sessionState, spec capture
 		return fmt.Errorf("no running pods matched in namespace %q", spec.Namespace)
 	}
 
+	sess.reconcileMu.Lock()
+	defer sess.reconcileMu.Unlock()
+
 	nodes := make([]string, 0, len(groups))
 	for _, group := range groups {
 		if err := sess.context().Err(); err != nil {
 			return fmt.Errorf("session stopped during agent scheduling: %w", err)
 		}
 
-		for _, target := range group.Targets {
-			sess.emit(&snifferv1.SessionEvent{
-				SessionId: sessionID,
-				Severity:  snifferv1.Severity_SEVERITY_INFO,
-				Message:   fmt.Sprintf("matched pod %s on node %s", target.GetName(), group.Node),
-				Payload: &snifferv1.SessionEvent_PodAttached{
-					PodAttached: &snifferv1.PodAttached{Pod: target},
-				},
-			})
-		}
-
-		requestedStreamID := uuid.NewString()
-		createOpts := agent.CreateOptions{
-			ActiveDeadline: spec.Duration,
-			StreamID:       requestedStreamID,
-		}
-
-		pod, err := h.agents.CreateForNode(sess.context(), sessionID, group.Node, createOpts)
-		if err != nil {
+		if err := h.ensureNodeAgent(sess, spec, group); err != nil {
 			return err
 		}
-		streamID, err := agent.StreamIDFromPod(pod)
-		if err != nil {
-			return err
-		}
-		assignment := buildAssignment(sessionID, group, spec, streamID)
-		sess.recordAgent(group.Node, pod.Name, streamID, assignment)
-
-		sess.emit(&snifferv1.SessionEvent{
-			SessionId: sessionID,
-			Severity:  snifferv1.Severity_SEVERITY_INFO,
-			Message:   fmt.Sprintf("scheduling agent %s on node %s", pod.Name, group.Node),
-			Payload: &snifferv1.SessionEvent_AgentState{
-				AgentState: &snifferv1.AgentStateChanged{
-					Node:     group.Node,
-					AgentPod: pod.Name,
-					Phase:    snifferv1.AgentPhase_AGENT_PHASE_SCHEDULING,
-					Targets:  targetsFromAssignment(assignment),
-				},
-			},
-		})
-
-		if err := h.agents.WaitReady(sess.context(), sessionID, pod); err != nil {
-			return fmt.Errorf("wait for agent on node %q: %w", group.Node, err)
-		}
-
 		nodes = append(nodes, group.Node)
-
-		sess.emit(&snifferv1.SessionEvent{
-			SessionId: sessionID,
-			Severity:  snifferv1.Severity_SEVERITY_INFO,
-			Message:   fmt.Sprintf("agent %s ready on node %s", pod.Name, group.Node),
-			Payload: &snifferv1.SessionEvent_AgentState{
-				AgentState: &snifferv1.AgentStateChanged{
-					Node:     group.Node,
-					AgentPod: pod.Name,
-					Phase:    snifferv1.AgentPhase_AGENT_PHASE_READY,
-					Targets:  targetsFromAssignment(assignment),
-				},
-			},
-		})
 	}
 
 	sess.setNodes(nodes)
@@ -289,6 +236,9 @@ func (h *Hub) stopSession(ctx context.Context, sess *sessionState) (*snifferv1.S
 	sess.emitState(sessionID, snifferv1.SessionState_SESSION_STATE_STOPPING)
 	sess.signalStop()
 
+	sess.reconcileMu.Lock()
+	defer sess.reconcileMu.Unlock()
+
 	if err := h.agents.DeleteSessionAgents(ctx, sessionID); err != nil {
 		return nil, err
 	}
@@ -297,6 +247,7 @@ func (h *Hub) stopSession(ctx context.Context, sess *sessionState) (*snifferv1.S
 	// (S2-agent-capture). Returns immediately when no ingest stream is active.
 	sess.waitCaptureStreamsIdle(ctx, agentFlushGrace)
 
+	sess.emitStats()
 	sess.setState(snifferv1.SessionState_SESSION_STATE_STOPPED, "")
 	sess.emitState(sessionID, snifferv1.SessionState_SESSION_STATE_STOPPED)
 	snapshot := sess.snapshot()
@@ -434,8 +385,7 @@ func (h *Hub) WatchTargets(req *snifferv1.WatchTargetsRequest, stream snifferv1.
 	if agentPod != req.GetAgentPod() {
 		return status.Error(codes.PermissionDenied, "agent pod metadata mismatch")
 	}
-	assignment, err := sess.assignmentFor(req.GetNode(), agentPod, streamID)
-	if err != nil {
+	if _, err := sess.assignmentFor(req.GetNode(), agentPod, streamID); err != nil {
 		return status.Errorf(codes.PermissionDenied, "agent assignment: %v", err)
 	}
 	if err := sess.waitUntilRunning(stream.Context()); err != nil {
@@ -444,14 +394,18 @@ func (h *Hub) WatchTargets(req *snifferv1.WatchTargetsRequest, stream snifferv1.
 	if err := sess.packets.waitForSubscriber(stream.Context()); err != nil {
 		return status.Errorf(codes.FailedPrecondition, "packet subscriber: %v", err)
 	}
-	if err := stream.Send(assignment); err != nil {
-		return err
-	}
-	select {
-	case <-stream.Context().Done():
-		return stream.Context().Err()
-	case <-sess.done():
-		return nil
+	for {
+		gen := sess.assignmentGeneration()
+		assignment, err := sess.assignmentFor(req.GetNode(), agentPod, streamID)
+		if err != nil {
+			return nil
+		}
+		if err := stream.Send(assignment); err != nil {
+			return err
+		}
+		if err := sess.waitAssignChange(stream.Context(), req.GetNode(), gen); err != nil {
+			return nil
+		}
 	}
 }
 
@@ -493,26 +447,34 @@ func (h *Hub) StreamCapture(stream snifferv1.AgentIngestService_StreamCaptureSer
 		if err := sess.validateCaptureBatch(batch); err != nil {
 			return status.Errorf(codes.FailedPrecondition, "capture batch: %v", err)
 		}
+		assignment, _ := sess.assignmentForNode(batch.GetNode())
 		for _, rec := range batch.GetRecords() {
-			if err := sess.packets.publish(stream.Context(), rec); err != nil {
-				if errors.Is(err, errPacketLogClosed) {
-					return stream.SendAndClose(&snifferv1.StreamCaptureSummary{RecordsAccepted: accepted})
+			skip := assignedTarget(assignment, captureRecordPod(rec)) == nil
+			if !skip {
+				if err := sess.packets.publish(stream.Context(), rec); err != nil {
+					if errors.Is(err, errPacketLogClosed) {
+						return stream.SendAndClose(&snifferv1.StreamCaptureSummary{RecordsAccepted: accepted})
+					}
+					return err
 				}
-				return err
+			} else {
+				hubLog.Debug("skipped unassigned capture record",
+					slog.String("session_id", batch.GetSessionId()),
+					slog.String("node", batch.GetNode()),
+				)
 			}
-			if err := sess.commitCaptureRecord(batch.GetNode(), batch.GetStreamId(), rec); err != nil {
+			if err := sess.commitCaptureRecord(batch.GetNode(), batch.GetStreamId(), rec, !skip); err != nil {
 				return status.Errorf(codes.FailedPrecondition, "capture record commit: %v", err)
 			}
 			accepted++
 		}
 		if batch.GetDropped() > 0 {
+			sess.addDropped(batch.GetDropped(), nil)
 			sess.emit(&snifferv1.SessionEvent{
 				SessionId: batch.GetSessionId(),
 				Severity:  snifferv1.Severity_SEVERITY_WARNING,
 				Message:   fmt.Sprintf("agent dropped %d capture records", batch.GetDropped()),
-				Payload: &snifferv1.SessionEvent_Stats{
-					Stats: &snifferv1.SessionStats{Dropped: batch.GetDropped()},
-				},
+				Payload:   &snifferv1.SessionEvent_Stats{Stats: sess.snapshotStats()},
 			})
 		}
 		hubLog.Debug("capture batch ingested",

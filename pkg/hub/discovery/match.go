@@ -85,6 +85,9 @@ func ListMatchingPods(ctx context.Context, client kubernetes.Interface, namespac
 		if !IsRunning(&pod) {
 			continue
 		}
+		if pod.DeletionTimestamp != nil {
+			continue
+		}
 		if !matcher.MatchName(pod.Name) {
 			continue
 		}

@@ -2,6 +2,7 @@ package hub
 
 import (
 	"testing"
+	"time"
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
 	"google.golang.org/protobuf/proto"
@@ -25,14 +26,49 @@ func TestValidateCaptureBatchRequiresStreamIdentity(t *testing.T) {
 	}
 }
 
-func TestValidateCaptureBatchRejectsUnassignedPod(t *testing.T) {
+func TestValidateCaptureBatchAllowsUnassignedPod(t *testing.T) {
 	sess, batch := testCaptureSession()
 	sess.setState(snifferv1.SessionState_SESSION_STATE_RUNNING, "")
 	pod := proto.Clone(batch.Records[0].GetWireFrame().GetPod()).(*snifferv1.PodRef)
 	pod.Name = "other"
 	batch.Records[0].GetWireFrame().Pod = pod
-	if err := sess.validateCaptureBatch(batch); err == nil {
-		t.Fatal("expected unassigned pod to be rejected")
+	if err := sess.validateCaptureBatch(batch); err != nil {
+		t.Fatalf("in-flight unassigned record should be skipped, not rejected: %v", err)
+	}
+}
+
+func TestCommitUnassignedAdvancesSequenceWithoutStats(t *testing.T) {
+	sess, batch := testCaptureSession()
+	unassigned := proto.Clone(batch.GetRecords()[0]).(*snifferv1.CaptureRecord)
+	pod := proto.Clone(unassigned.GetWireFrame().GetPod()).(*snifferv1.PodRef)
+	pod.Name = "other"
+	unassigned.GetWireFrame().Pod = pod
+	if err := sess.commitCaptureRecord("node-a", "stream-a", unassigned, false); err != nil {
+		t.Fatalf("commit unassigned sequence: %v", err)
+	}
+	if stats := sess.snapshotStats(); stats.GetPackets() != 0 {
+		t.Fatalf("packets = %d, want 0 after skipped record", stats.GetPackets())
+	}
+	assigned := batch.GetRecords()[0]
+	assigned.GetWireFrame().Sequence = 2
+	if err := sess.commitCaptureRecord("node-a", "stream-a", assigned, true); err != nil {
+		t.Fatalf("commit assigned sequence 2: %v", err)
+	}
+	if stats := sess.snapshotStats(); stats.GetPackets() != 1 {
+		t.Fatalf("packets = %d, want 1", stats.GetPackets())
+	}
+}
+
+func TestRemainingActiveDeadline(t *testing.T) {
+	if got := remainingActiveDeadline(0, time.Now()); got != 0 {
+		t.Fatalf("zero duration = %v, want 0", got)
+	}
+	got := remainingActiveDeadline(10*time.Second, time.Now().Add(-3*time.Second))
+	if got < 6*time.Second || got > 8*time.Second {
+		t.Fatalf("remaining = %v, want ~7s", got)
+	}
+	if got := remainingActiveDeadline(time.Second, time.Now().Add(-2*time.Second)); got != 0 {
+		t.Fatalf("expired duration = %v, want 0", got)
 	}
 }
 
@@ -72,7 +108,7 @@ func TestSequenceAdvancesOnlyAfterRecordCommit(t *testing.T) {
 	if err := sess.validateCaptureBatch(batch); err != nil {
 		t.Fatalf("validation advanced sequence before publish: %v", err)
 	}
-	if err := sess.commitCaptureRecord("node-a", "stream-a", batch.GetRecords()[0]); err != nil {
+	if err := sess.commitCaptureRecord("node-a", "stream-a", batch.GetRecords()[0], true); err != nil {
 		t.Fatalf("commitCaptureRecord: %v", err)
 	}
 	if err := sess.validateCaptureBatch(batch); err == nil {

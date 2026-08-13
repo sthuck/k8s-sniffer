@@ -127,6 +127,70 @@ func TestIT1_1_CreateSessionSchedulesAndStopDeletesAgents(t *testing.T) {
 	}
 }
 
+func TestIT2_1_LiveWatchAddsAndRemovesAgents(t *testing.T) {
+	client := startEnvtest(t)
+	fk := startFakeKubelet(t, client, capture.DefaultAgentNamespace)
+	t.Cleanup(fk.stop)
+
+	mustCreateNamespace(t, client, "prod")
+	mustCreateNamespace(t, client, capture.DefaultAgentNamespace)
+	mustCreateWorkloadPods(t, client, "prod",
+		workloadPod("payments-api", "node-a"),
+	)
+
+	hubClient, cleanup := startEnvtestHub(t, client)
+	t.Cleanup(cleanup)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	created, err := hubClient.CreateSession(ctx, &snifferv1.CreateSessionRequest{
+		Spec: &snifferv1.CaptureSpec{
+			Namespace:   "prod",
+			PodPatterns: []string{"payments-.*", "checkout-.*"},
+			TlsMode:     snifferv1.TlsMode_TLS_MODE_OFF,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	session := created.GetSession()
+	if session.GetState() != snifferv1.SessionState_SESSION_STATE_RUNNING {
+		t.Fatalf("state = %s, want RUNNING (failure=%q)", session.GetState(), session.GetFailureReason())
+	}
+	packets, err := hubClient.SubscribePackets(ctx, &snifferv1.SubscribePacketsRequest{SessionId: session.GetId()})
+	if err != nil {
+		t.Fatalf("SubscribePackets: %v", err)
+	}
+	go func() { _, _ = packets.Recv() }()
+
+	selector, err := agent.SessionLabelSelector(session.GetId())
+	if err != nil {
+		t.Fatalf("SessionLabelSelector: %v", err)
+	}
+	waitUntil(t, 10*time.Second, func() bool {
+		list, err := client.CoreV1().Pods(capture.DefaultAgentNamespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+		return err == nil && len(list.Items) == 1
+	})
+
+	mustCreateWorkloadPods(t, client, "prod", workloadPod("checkout-web", "node-b"))
+	waitUntil(t, 15*time.Second, func() bool {
+		list, err := client.CoreV1().Pods(capture.DefaultAgentNamespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+		return err == nil && len(list.Items) == 2
+	})
+
+	if err := client.CoreV1().Pods("prod").Delete(ctx, "checkout-web", metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("delete checkout-web: %v", err)
+	}
+	waitUntil(t, 15*time.Second, func() bool {
+		list, err := client.CoreV1().Pods(capture.DefaultAgentNamespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+		if err != nil || len(list.Items) != 1 {
+			return false
+		}
+		return list.Items[0].Spec.NodeName == "node-a"
+	})
+}
+
 func assertAgentsPinnedToSessionNodes(t *testing.T, sessionNodes []string, agents []corev1.Pod) {
 	t.Helper()
 	want := map[string]struct{}{}
@@ -193,9 +257,11 @@ func startEnvtestHub(t *testing.T, client kubernetes.Interface) (snifferv1.HubSe
 	cfg.HubIngestAddr = "127.0.0.1:50051"
 
 	h, err := hub.New(hub.Options{
-		Kubernetes:   client,
-		Agent:        cfg,
-		ReadyTimeout: 30 * time.Second,
+		Kubernetes:    client,
+		Agent:         cfg,
+		ReadyTimeout:  30 * time.Second,
+		WatchInterval: 50 * time.Millisecond,
+		StatsInterval: 50 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("hub.New: %v", err)

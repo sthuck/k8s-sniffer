@@ -74,7 +74,7 @@ CI shape (evolve over phases):
 |-----|------|---------|--------|
 | `unit` | every PR + push to `main` | `make verify` (proto-check, vet, `go test ./...`) | Live in [`.github/workflows/verify.yml`](../.github/workflows/verify.yml) |
 | `integration` | every PR | `make integration-test` (envtest IT1.1) | Live (T-TEST.2 / T-TEST.3) |
-| `e2e-kind` | every PR | `./test/e2e/run.sh` (E2E1.1); uploads artifacts on failure | Live (T-TEST.2 / T-TEST.7) |
+| `e2e-kind` | every PR | `./test/e2e/run.sh` (E2E1.1 + E2E2.1/2.3/2.6); uploads artifacts on failure | Live (T-TEST.2 / T-TEST.7 / T-TEST.4) |
 | `e2e-kind-tls` | every PR after T3.9 (or nightly if flaky) | `./test/e2e/run.sh kind -tags e2e_tls` | Planned |
 | `e2e-k3s` | nightly / manual | `./test/e2e/run.sh k3s` | Planned |
 
@@ -130,7 +130,7 @@ No automated product tests. Optional: markdown link check later.
 | **E2E2.5** | kind | T2.8 | `--duration 10s` exits 0; finite pcap; agents cleaned up |
 | **E2E2.6** | kind | T2.7 | Stats/events show packet counters > 0 after traffic |
 
-**Phase 2 CI:** keep Phase 1 jobs; add `E2E2.1` + `E2E2.3` as required; rest can be `e2e-kind-extended` if runtime is high.
+**Phase 2 CI:** keep Phase 1 jobs; add `E2E2.1` + `E2E2.3` + E2E2.6 as required. E2E2.4 / E2E2.5 wait on deferred T2.4 / T2.8.
 
 ---
 
@@ -240,7 +240,7 @@ Generate traffic **during** capture (background curl loop), not only before star
 | Phase exit | Must-pass tests |
 |------------|-----------------|
 | Phase 1 | UT1.* (core), IT1.1, **E2E1.1**, E2E1.3 |
-| Phase 2 | + **E2E2.1**, **E2E2.3**, E2E2.5 |
+| Phase 2 | + **E2E2.1**, **E2E2.3**, E2E2.6 (E2E2.5 deferred with T2.8) |
 | Phase 3 | + **E2E3.1** (or documented CI skip + nightly), E2E3.3, E2E3.4 |
 | Phase 4 | + **E2E4.1**, E2E4.2 |
 | Phase 5 | + UI contract / E2E5.1 |

@@ -109,10 +109,13 @@ func (m *Manager) AgentOnNode(ctx context.Context, sessionID, nodeName string) (
 		slog.String("selector", selector),
 		slog.Int("count", len(list.Items)),
 	)
-	if len(list.Items) == 0 {
-		return nil, false, nil
+	for i := range list.Items {
+		pod := &list.Items[i]
+		if podReusable(pod) {
+			return pod, true, nil
+		}
 	}
-	return &list.Items[0], true, nil
+	return nil, false, nil
 }
 
 // CreateForNode builds and creates an agent pod on nodeName for sessionID. If an
@@ -130,6 +133,9 @@ func (m *Manager) CreateForNode(ctx context.Context, sessionID, nodeName string,
 			slog.String("pod", existing.Name),
 		)
 		return existing, nil
+	}
+	if err := m.DeleteAgentOnNode(ctx, sessionID, nodeName); err != nil {
+		return nil, err
 	}
 
 	pod, err := PodManifest(sessionID, opts.StreamID, nodeName, m.cfg, opts.ActiveDeadline)
@@ -226,6 +232,18 @@ func isRetriableAPIError(err error) bool {
 		apierrors.IsServiceUnavailable(err) ||
 		apierrors.IsTooManyRequests(err) ||
 		apierrors.IsInternalError(err)
+}
+
+func podReusable(pod *corev1.Pod) bool {
+	if pod == nil || pod.DeletionTimestamp != nil {
+		return false
+	}
+	switch pod.Status.Phase {
+	case corev1.PodFailed, corev1.PodSucceeded:
+		return false
+	default:
+		return true
+	}
 }
 
 func podTerminalReason(pod *corev1.Pod) string {
@@ -361,5 +379,65 @@ func (m *Manager) waitSessionAgentsGone(ctx context.Context, sessionID string) e
 			return false, err
 		}
 		return len(pods) == 0, nil
+	})
+}
+
+// DeleteAgentOnNode removes the session agent pinned to nodeName, if any.
+func (m *Manager) DeleteAgentOnNode(ctx context.Context, sessionID, nodeName string) error {
+	selector, err := SessionNodeLabelSelector(sessionID, nodeName)
+	if err != nil {
+		return err
+	}
+	grace := int64(5)
+	propagation := metav1.DeletePropagationBackground
+	deleteOpts := metav1.DeleteOptions{
+		GracePeriodSeconds: &grace,
+		PropagationPolicy:  &propagation,
+	}
+	agentLog.Debug("deleting agent on node",
+		slog.String("session_id", sessionID),
+		slog.String("node", nodeName),
+		slog.String("selector", selector),
+	)
+	list, err := m.client.CoreV1().Pods(m.cfg.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: selector,
+	})
+	if err != nil {
+		return fmt.Errorf("list agent on node %q: %w", nodeName, err)
+	}
+	var errs []error
+	for i := range list.Items {
+		pod := list.Items[i]
+		if delErr := m.client.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, deleteOpts); delErr != nil && !apierrors.IsNotFound(delErr) {
+			errs = append(errs, fmt.Errorf("delete agent pod %s/%s: %w", pod.Namespace, pod.Name, delErr))
+		}
+	}
+	if joinErr := errors.Join(errs...); joinErr != nil {
+		return joinErr
+	}
+	if err := m.waitSelectorGone(ctx, selector); err != nil {
+		return err
+	}
+	agentLog.Info("agent on node deleted",
+		slog.String("session_id", sessionID),
+		slog.String("node", nodeName),
+	)
+	return nil
+}
+
+func (m *Manager) waitSelectorGone(ctx context.Context, selector string) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultDeleteTimeout)
+	defer cancel()
+	return wait.PollUntilContextCancel(ctx, 200*time.Millisecond, true, func(ctx context.Context) (bool, error) {
+		list, err := m.client.CoreV1().Pods(m.cfg.Namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: selector,
+		})
+		if err != nil {
+			if isRetriableAPIError(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return len(list.Items) == 0, nil
 	})
 }

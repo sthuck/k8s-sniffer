@@ -26,9 +26,11 @@ func TestRunnerCancelsCapturesWhenSenderFails(t *testing.T) {
 	stream := &fakeCaptureStream{ctx: context.Background(), sendErr: errors.New("ingest failed")}
 	runner := testRunner(t, []*snifferv1.PodRef{pod}, stream, &blockingCapturer{})
 
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- runner.Run(context.Background())
+		done <- runner.Run(ctx)
 	}()
 	select {
 	case err := <-done:
@@ -47,18 +49,29 @@ func TestRunnerSequencesAreUniqueAcrossTargets(t *testing.T) {
 	}
 	stream := &fakeCaptureStream{ctx: context.Background()}
 	runner := testRunner(t, pods, stream, finiteCapturer{})
-	if err := runner.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
 
-	stream.mu.Lock()
-	defer stream.mu.Unlock()
+	deadline := time.Now().Add(2 * time.Second)
 	var sequences []uint64
-	for _, batch := range stream.batches {
-		for _, record := range batch.GetRecords() {
-			sequences = append(sequences, record.GetWireFrame().GetSequence())
+	for time.Now().Before(deadline) {
+		stream.mu.Lock()
+		sequences = sequences[:0]
+		for _, batch := range stream.batches {
+			for _, record := range batch.GetRecords() {
+				sequences = append(sequences, record.GetWireFrame().GetSequence())
+			}
 		}
+		stream.mu.Unlock()
+		if len(sequences) >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+	cancel()
+	<-done
 	if len(sequences) != 2 || sequences[0] == sequences[1] ||
 		(sequences[0] != 1 && sequences[1] != 1) ||
 		(sequences[0] != 2 && sequences[1] != 2) {
@@ -113,6 +126,88 @@ func TestRunnerDeliversFramesBeforeCancel(t *testing.T) {
 	}
 }
 
+func TestRunnerHotAddsTarget(t *testing.T) {
+	pod1 := &snifferv1.PodRef{Namespace: "prod", Name: "api", Uid: "uid-1", Node: "node-a"}
+	pod2 := &snifferv1.PodRef{Namespace: "prod", Name: "web", Uid: "uid-2", Node: "node-a"}
+	stream := &fakeCaptureStream{ctx: context.Background()}
+	updates := make(chan *snifferv1.AgentAssignment, 1)
+	resolver := netns.NewMapResolver()
+	resolver.Set(pod1, "/proc/1/ns/net")
+	resolver.Set(pod2, "/proc/2/ns/net")
+	cfg := Config{
+		SessionID: "session-a",
+		Node:      "node-a",
+		AgentPod:  "agent-a",
+		StreamID:  "stream-a",
+		HubAddr:   "hub:50051",
+		CRISocket: "/run/containerd/containerd.sock",
+	}
+	first := &snifferv1.AgentAssignment{
+		SessionId: cfg.SessionID,
+		Node:      cfg.Node,
+		StreamId:  cfg.StreamID,
+		Targets:   []*snifferv1.Target{{Pod: pod1, Snaplen: 65535}},
+	}
+	capturer := &countingCapturer{}
+	client := &fakeHubClient{assignment: first, updates: updates, stream: stream}
+	runner := NewRunner(RunnerOptions{
+		Config:   cfg,
+		Resolver: resolver,
+		Tcpdump:  capturer,
+		Dial: func(context.Context, string) (HubClient, error) {
+			return client, nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+
+	waitUntilCaptures(t, capturer, 1)
+	updates <- &snifferv1.AgentAssignment{
+		SessionId: cfg.SessionID,
+		Node:      cfg.Node,
+		StreamId:  cfg.StreamID,
+		Targets:   []*snifferv1.Target{{Pod: pod1, Snaplen: 65535}, {Pod: pod2, Snaplen: 65535}},
+	}
+	waitUntilCaptures(t, capturer, 2)
+	cancel()
+	<-done
+}
+
+func waitUntilCaptures(t *testing.T, c *countingCapturer, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		got := c.n
+		c.mu.Unlock()
+		if got >= n {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("capturer starts = %d, want %d", c.n, n)
+}
+
+type countingCapturer struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *countingCapturer) Start(ctx context.Context, _ string, _ uint32, _ string, _ []string) (io.ReadCloser, error) {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+	reader, writer := io.Pipe()
+	go func() {
+		_, _ = writer.Write(testPCAP(1))
+		<-ctx.Done()
+		_ = writer.CloseWithError(ctx.Err())
+	}()
+	return reader, nil
+}
+
 func testRunner(
 	t *testing.T,
 	pods []*snifferv1.PodRef,
@@ -155,11 +250,12 @@ func testRunner(
 
 type fakeHubClient struct {
 	assignment *snifferv1.AgentAssignment
+	updates    <-chan *snifferv1.AgentAssignment
 	stream     snifferv1.AgentIngestService_StreamCaptureClient
 }
 
-func (c *fakeHubClient) WatchTargets(context.Context, string, string, string, string) (*snifferv1.AgentAssignment, error) {
-	return c.assignment, nil
+func (c *fakeHubClient) WatchTargets(ctx context.Context, _ string, _ string, _ string, _ string) (AssignmentWatcher, error) {
+	return &fakeAssignWatch{asg: c.assignment, rest: c.updates, ctx: ctx}, nil
 }
 
 func (c *fakeHubClient) StreamCapture(context.Context, string, string) (snifferv1.AgentIngestService_StreamCaptureClient, error) {
@@ -171,6 +267,38 @@ func (c *fakeHubClient) ReportStatus(context.Context, *snifferv1.ReportStatusReq
 }
 
 func (c *fakeHubClient) Close() error { return nil }
+
+type fakeAssignWatch struct {
+	mu   sync.Mutex
+	sent bool
+	asg  *snifferv1.AgentAssignment
+	rest <-chan *snifferv1.AgentAssignment
+	ctx  context.Context
+}
+
+func (w *fakeAssignWatch) Recv() (*snifferv1.AgentAssignment, error) {
+	w.mu.Lock()
+	if !w.sent {
+		w.sent = true
+		asg := w.asg
+		w.mu.Unlock()
+		return asg, nil
+	}
+	w.mu.Unlock()
+	if w.rest != nil {
+		select {
+		case a, ok := <-w.rest:
+			if !ok {
+				return nil, io.EOF
+			}
+			return a, nil
+		case <-w.ctx.Done():
+			return nil, w.ctx.Err()
+		}
+	}
+	<-w.ctx.Done()
+	return nil, w.ctx.Err()
+}
 
 type fakeCaptureStream struct {
 	ctx     context.Context

@@ -4,8 +4,8 @@ Lightweight Kubernetes traffic sniffer: match pods by namespace + regex, run nod
 
 ## Status
 
-Phase 1 MVP wire path: discovery, hub scheduling, agent capture, CLI `capture`
-command, PCAP sink, agent image, RBAC manifests, and kind e2e harness.
+Phase 1 MVP wire path plus Phase 2 multi-pod polish: live pod attach/detach,
+per-node agent hot-update, PCAPng pod metadata, and session stats.
 
 ```bash
 k8s-sniffer capture -n NAMESPACE --pod 'REGEX' -o out.pcapng \
@@ -13,7 +13,9 @@ k8s-sniffer capture -n NAMESPACE --pod 'REGEX' -o out.pcapng \
   --hub-ingest-addr <host-reachable-from-pods>:30551
 ```
 
-Phase 1 testing complete (T-TEST.2/3/7): unit, envtest integration, and kind e2e in CI.
+Phase 1+2 testing: unit, envtest integration (IT1.1 / IT2.1), and kind e2e
+(E2E1.1, E2E2.1, E2E2.3, E2E2.6) in CI. `--bpf` e2e, `--split-per-pod`, and
+`--duration` e2e are deferred.
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — design
 - **[docs/TASKS.md](docs/TASKS.md)** — phased task breakdown + progress checklist
@@ -62,7 +64,7 @@ k8s-sniffer capture \
   --hub-ingest-addr 172.18.0.1:30551
 ```
 
-TLS modes (`--tls auto`) land in Phase 3; Phase 1 is wire capture only.
+TLS modes (`--tls auto`) land in Phase 3; wire capture and live pod watch are in.
 
 ## High-level shape
 

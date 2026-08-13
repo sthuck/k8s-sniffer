@@ -264,6 +264,19 @@ func watchEvents(ctx context.Context, client snifferv1.HubServiceClient, session
 		if err != nil {
 			return err
 		}
+		if stats := ev.GetStats(); stats != nil {
+			fmt.Fprintf(w, "stats: packets=%d bytes=%d dropped=%d\n",
+				stats.GetPackets(), stats.GetBytes(), stats.GetDropped())
+			for _, p := range stats.GetPerPod() {
+				name := ""
+				if p.GetPod() != nil {
+					name = p.GetPod().GetName()
+				}
+				fmt.Fprintf(w, "stats: pod=%s packets=%d bytes=%d dropped=%d\n",
+					name, p.GetPackets(), p.GetBytes(), p.GetDropped())
+			}
+			continue
+		}
 		fmt.Fprintf(w, "event: %s\n", ev.GetMessage())
 	}
 }

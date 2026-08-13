@@ -77,10 +77,13 @@ and provides a ServiceAccount for Phase 4 in-cluster hub.
 
 ```text
 test/e2e/
-  kind.yaml              # single-node kind + host port 30551
+  kind.yaml              # 2-node kind + host port 30551 (T-TEST.4)
   run.sh                 # kind | test | (default: both)
   fixtures/http-echo.yaml
+  harness_test.go        //go:build e2e — shared helpers
   smoke_test.go          //go:build e2e — E2E1.1
+  watch_test.go          //go:build e2e — E2E2.1 / E2E2.2 / E2E2.6
+  multinode_test.go      //go:build e2e — E2E2.3
 ```
 
 `./test/e2e/run.sh`:

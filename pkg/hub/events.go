@@ -25,6 +25,10 @@ func (l *eventLog) append(ev *snifferv1.SessionEvent) {
 		ev.Timestamp = timestamppb.Now()
 	}
 	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return
+	}
 	l.events = append(l.events, ev)
 	subs := make([]chan *snifferv1.SessionEvent, 0, len(l.subs))
 	for _, ch := range l.subs {

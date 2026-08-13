@@ -30,6 +30,11 @@ type Options struct {
 	Agent capture.AgentConfig
 	// ReadyTimeout overrides agent pod Ready wait (zero = agent.DefaultReadyTimeout).
 	ReadyTimeout time.Duration
+	// WatchInterval is the fallback pod-list poll for live attach/detach.
+	// Zero uses 1s. A Kubernetes Watch, when available, triggers reconcile immediately.
+	WatchInterval time.Duration
+	// StatsInterval is how often SessionStats events are emitted. Zero uses 5s.
+	StatsInterval time.Duration
 }
 
 // Hub is the session orchestrator. Embed the unimplemented servers so new RPCs
