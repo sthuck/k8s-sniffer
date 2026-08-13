@@ -141,7 +141,8 @@ type TlsPlaintextEvent struct {
 	Process      string `protobuf:"bytes,7,opt,name=process,proto3" json:"process,omitempty"`
 	// TLS stack the uprobe attached to, e.g. "openssl", "gotls".
 	TlsLibrary string `protobuf:"bytes,8,opt,name=tls_library,json=tlsLibrary,proto3" json:"tls_library,omitempty"`
-	// Monotonic within (stream_id, connection_id).
+	// Monotonic per TLS worker (one worker per target). connection_id groups
+	// records when known; empty means the worker did not assign a connection.
 	Sequence uint64 `protobuf:"varint,9,opt,name=sequence,proto3" json:"sequence,omitempty"`
 }
 

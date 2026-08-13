@@ -37,7 +37,8 @@ message TlsPlaintextEvent {
   string process = 7;
   // TLS stack the uprobe attached to, e.g. "openssl", "gotls".
   string tls_library = 8;
-  // Monotonic within (stream_id, connection_id).
+  // Monotonic per TLS worker (one worker per target). connection_id groups
+  // records when known; empty means the worker did not assign a connection.
   uint64 sequence = 9;
 }
 

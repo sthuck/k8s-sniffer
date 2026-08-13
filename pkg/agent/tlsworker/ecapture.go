@@ -21,13 +21,12 @@ var tlsLog = log.WithComponent("agent")
 const (
 	// DefaultBinary is the ecapture executable name in the agent image.
 	DefaultBinary = "ecapture"
-	attachGrace   = 2 * time.Second
 )
 
 // ECapture shells out to the vendored ecapture binary (T3.2 / T3.3).
 type ECapture struct {
 	Binary string
-	// LookLibSSL finds libssl.so for a pid. Tests override this.
+	// LookLibSSL finds libssl.so in the target container. Tests override this.
 	LookLibSSL func(pid int) (string, error)
 	// CgroupPath returns a cgroup v2 path for a pid. Tests override this.
 	CgroupPath func(pid int) string
@@ -44,7 +43,7 @@ func (e ECapture) binary() string {
 // the wire path. Keylog mode never launches eBPF.
 func (e ECapture) Attach(ctx context.Context, target Target) (<-chan *snifferv1.TlsPlaintextEvent, <-chan Status, error) {
 	events := make(chan *snifferv1.TlsPlaintextEvent, 64)
-	statuses := make(chan Status, 4)
+	statuses := make(chan Status, 1)
 
 	switch target.Mode {
 	case snifferv1.TlsMode_TLS_MODE_KEYLOG:
@@ -76,7 +75,7 @@ func (e ECapture) Attach(ctx context.Context, target Target) (<-chan *snifferv1.
 
 	look := e.LookLibSSL
 	if look == nil {
-		look = findLibSSLInNetns
+		look = findLibSSLInContainer
 	}
 	libssl, err := look(target.PID)
 	if err != nil {
@@ -133,12 +132,26 @@ func (e ECapture) Attach(ctx context.Context, target Target) (<-chan *snifferv1.
 
 	parsed := make(chan parsedEvent, 64)
 	stderrBuf := &limitedBuffer{max: 4096}
-	go parseStream(stdout, parsed)
-	go parseStream(io.TeeReader(stderr, stderrBuf), parsed)
+	parseCtx, parseCancel := context.WithCancel(ctx)
+	var parseWG sync.WaitGroup
+	parseWG.Add(2)
+	go func() {
+		defer parseWG.Done()
+		parseStream(parseCtx, stdout, parsed)
+	}()
+	go func() {
+		defer parseWG.Done()
+		parseStream(parseCtx, io.TeeReader(stderr, stderrBuf), parsed)
+	}()
+	go func() {
+		parseWG.Wait()
+		close(parsed)
+	}()
 
 	go func() {
 		defer close(events)
 		defer close(statuses)
+		defer parseCancel()
 		defer func() {
 			if cmd.Process != nil {
 				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
@@ -149,33 +162,38 @@ func (e ECapture) Attach(ctx context.Context, target Target) (<-chan *snifferv1.
 		go func() { waitDone <- cmd.Wait() }()
 
 		activeSent := false
-		timer := time.NewTimer(attachGrace)
-		defer timer.Stop()
 		var seq uint64
 
-		sendStatus := func(st Status) {
+		stopProcess := func() {
+			parseCancel()
+			if cmd.Process != nil {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
+			}
 			select {
-			case statuses <- st:
-			default:
+			case <-waitDone:
+			case <-time.After(3 * time.Second):
+				if cmd.Process != nil {
+					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				}
+				<-waitDone
+			}
+			if parsed != nil {
+				for range parsed {
+				}
 			}
 		}
 
 		for {
 			select {
 			case <-ctx.Done():
-				if cmd.Process != nil {
-					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
-				}
-				select {
-				case <-waitDone:
-				case <-time.After(3 * time.Second):
-					if cmd.Process != nil {
-						_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-					}
-					<-waitDone
-				}
+				stopProcess()
 				return
 			case err := <-waitDone:
+				parseCancel()
+				if parsed != nil {
+					for range parsed {
+					}
+				}
 				if ctx.Err() != nil {
 					return
 				}
@@ -197,13 +215,8 @@ func (e ECapture) Attach(ctx context.Context, target Target) (<-chan *snifferv1.
 					slog.String("pod", podName(target)),
 					slog.String("detail", detail),
 				)
-				sendStatus(Status{Status: st, Detail: detail})
+				sendLatestStatus(statuses, Status{Status: st, Detail: detail})
 				return
-			case <-timer.C:
-				if !activeSent {
-					activeSent = true
-					sendStatus(Status{Status: snifferv1.TlsStatus_TLS_STATUS_ACTIVE, Detail: "ecapture attached"})
-				}
 			case ev, ok := <-parsed:
 				if !ok {
 					parsed = nil
@@ -211,7 +224,7 @@ func (e ECapture) Attach(ctx context.Context, target Target) (<-chan *snifferv1.
 				}
 				if !activeSent {
 					activeSent = true
-					sendStatus(Status{Status: snifferv1.TlsStatus_TLS_STATUS_ACTIVE, Detail: "ecapture attached"})
+					sendLatestStatus(statuses, Status{Status: snifferv1.TlsStatus_TLS_STATUS_ACTIVE, Detail: "ecapture attached"})
 				}
 				seq++
 				if ev.PID == 0 {
@@ -220,6 +233,7 @@ func (e ECapture) Attach(ctx context.Context, target Target) (<-chan *snifferv1.
 				select {
 				case events <- toProto(target.Pod, ev, seq):
 				case <-ctx.Done():
+					stopProcess()
 					return
 				}
 			}
@@ -262,6 +276,23 @@ func podName(t Target) string {
 		return ""
 	}
 	return t.Pod.GetName()
+}
+
+// sendLatestStatus keeps the newest status when the consumer is busy.
+func sendLatestStatus(ch chan Status, st Status) {
+	select {
+	case ch <- st:
+		return
+	default:
+	}
+	select {
+	case <-ch:
+	default:
+	}
+	select {
+	case ch <- st:
+	default:
+	}
 }
 
 // limitedBuffer keeps the last max bytes of writes for exit diagnostics.

@@ -3,6 +3,7 @@ package tlsworker
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"regexp"
@@ -29,27 +30,45 @@ type parsedEvent struct {
 	Timestamp time.Time
 }
 
-func parseStream(r io.Reader, out chan<- parsedEvent) {
+func parseStream(ctx context.Context, r io.Reader, out chan<- parsedEvent) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 2<<20)
 	var cur *parsedEvent
-	flush := func() {
+	send := func(ev parsedEvent) bool {
+		select {
+		case out <- ev:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	flush := func() bool {
 		if cur == nil || len(bytes.TrimSpace(cur.Payload)) == 0 {
 			cur = nil
-			return
+			return true
 		}
-		out <- *cur
+		ok := send(*cur)
 		cur = nil
+		return ok
 	}
 	for sc.Scan() {
+		if ctx.Err() != nil {
+			return
+		}
 		line := sc.Text()
 		if ev, ok := parseJSONLine(line); ok {
-			flush()
-			out <- ev
+			if !flush() {
+				return
+			}
+			if !send(ev) {
+				return
+			}
 			continue
 		}
 		if headerRe.MatchString(line) && strings.Contains(strings.ToLower(line), "pid:") {
-			flush()
+			if !flush() {
+				return
+			}
 			cur = parseTextHeader(line)
 			if i := strings.Index(line, "Payload:"); i >= 0 {
 				rest := strings.TrimSpace(line[i+len("Payload:"):])
@@ -64,7 +83,7 @@ func parseStream(r io.Reader, out chan<- parsedEvent) {
 			cur.Payload = append(cur.Payload, '\n')
 		}
 	}
-	flush()
+	_ = flush()
 }
 
 func parseJSONLine(line string) (parsedEvent, bool) {

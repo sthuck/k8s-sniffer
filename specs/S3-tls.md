@@ -27,6 +27,8 @@ Wire PCAP is always collected. TLS attach failures never fail the session.
 
 `--tls-out` is a JSONL path on the client. It cannot be `-` or equal to `--out`. `--keylog-file` is client-side only and is never injected into workloads.
 
+`auto` / `ebpf` always start the TLS worker so WatchEvents can show attach status, even when `--tls-out` is empty (plaintext is then discarded at the CLI). Use `--tls off` to skip eBPF.
+
 Existing kind wire e2e forces `TLSModeOff` so those jobs do not wait on ecapture.
 
 ## 2. Agent image (T3.2)
@@ -43,9 +45,11 @@ eCapture is invoked as:
 ecapture tls -m text --libssl /proc/<pid>/root/.../libssl.so [--cgroup_path ...]
 ```
 
-`--pid` is omitted on purpose: nginx and similar servers terminate TLS in workers, not the container init PID. Uprobes on the container's libssl inode cover every process that maps it. `findLibSSLInNetns` scans `/proc` for PIDs sharing the container netns so a worker that maps libssl is found even if the init PID does not.
+`--pid` is omitted on purpose: nginx and similar servers terminate TLS in workers, not the container init PID. Uprobes on the container's libssl inode cover every process that maps it. `findLibSSLInContainer` uses the CRI PID first, then other PIDs in that container's **mount namespace** (workers). Sidecars share the pod netns but not the app mount ns.
 
-Missing binary / no libssl → `unsupported` (`fallback` in `auto` when the binary is absent). Permission/BTF failures → `denied` (`fallback` in `auto`). After ~2s or the first parsed event → `active`.
+Missing binary / no libssl → `unsupported` (`fallback` in `auto` when the binary is absent). Permission/BTF failures → `denied` (`fallback` in `auto`). `active` is reported only after the first parsed plaintext event (starting the process is an info log, not a status).
+
+Phase 3 runs `ecapture tls` (OpenSSL/BoringSSL). Go `crypto/tls` / `ecapture gotls` is follow-up; those stacks report `unsupported`.
 
 Status is `ReportStatus` `TlsStateChanged`; the CLI prints `event: tls <pod>: TLS_STATUS_…`.
 
@@ -70,4 +74,4 @@ HTTPS fixture: `nginx:1.27-bookworm` + generated TLS Secret, marker `e2e-secret-
 | E2E3.3 | `e2e` | host client keylog + wire pcap; tshark decrypts when installed |
 | E2E3.4 | `e2e` | `--tls=off` JSONL has no marker |
 
-CI: `e2e-kind` runs E2E3.2–3.4; `e2e-kind-tls` runs `E2E_GO_TAGS=e2e,e2e_tls E2E_GO_RUN=TestE2E3_`.
+CI: `e2e-kind` runs E2E3.2–3.4; `e2e-kind-tls` runs `E2E_GO_TAGS=e2e,e2e_tls E2E_GO_RUN=TestE2E3_1`.

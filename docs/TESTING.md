@@ -75,7 +75,7 @@ CI shape (evolve over phases):
 | `unit` | every PR + push to `main` | `make verify` (proto-check, vet, `go test ./...`) | Live in [`.github/workflows/verify.yml`](../.github/workflows/verify.yml) |
 | `integration` | every PR | `make integration-test` (envtest IT1.1) | Live (T-TEST.2 / T-TEST.3) |
 | `e2e-kind` | every PR | `./test/e2e/run.sh` (E2E1.1 + E2E2.* + E2E3.2–3.4); uploads artifacts on failure | Live (T-TEST.2 / T-TEST.7 / T-TEST.4 / T3) |
-| `e2e-kind-tls` | every PR (E2E3.1) | `E2E_GO_TAGS=e2e,e2e_tls E2E_GO_RUN=TestE2E3_ ./test/e2e/run.sh all` | Required on ubuntu-latest kind (BTF). Document skip only if runners lack BPF. |
+| `e2e-kind-tls` | every PR (E2E3.1) | `E2E_GO_TAGS=e2e,e2e_tls E2E_GO_RUN=TestE2E3_1 ./test/e2e/run.sh all` | Required on ubuntu-latest kind (BTF). Document skip only if runners lack BPF. |
 | `e2e-k3s` | nightly / manual | `./test/e2e/run.sh k3s` | Planned |
 
 CI installs `protoc` at `PROTOC_VERSION` from the Makefile (same pin as local regen). Kind is pinned to v0.24.0 in the workflow.
@@ -144,7 +144,7 @@ TLS e2e is flakier (kernel, privileges, library match). Isolate with `e2e_tls` t
 | **UT3.2** | Unit | T3.4 | Multiplex: wire frames + TLS events ordered per stream contract |
 | **IT3.1** | Integration | T3.3, T3.6 | Fake TLS worker reports `unsupported` → Hub emits status; session stays up |
 | **E2E3.1** | kind + `e2e_tls` | T3.3–T3.5, T3.9 | OpenSSL/nginx fixture; HTTPS traffic; `--tls-out` JSONL contains known plaintext marker |
-| **E2E3.2** | kind + `e2e_tls` | T3.6 | Unsupported binary (e.g. static uncommon stack) → status `unsupported`/`fallback`; wire pcap still non-empty |
+| **E2E3.2** | kind | T3.6 | Unsupported binary (e.g. static uncommon stack) → status `unsupported`/`fallback`; wire pcap still non-empty |
 | **E2E3.3** | kind | T3.7 | Keylog mode: provide keylog + wire pcap; `tshark` decrypts Host/path or known string |
 | **E2E3.4** | kind | T3.1 | `--tls=off` produces no TLS plaintext file even if worker present |
 

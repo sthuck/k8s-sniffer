@@ -1,8 +1,10 @@
 package tlsworker
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
 )
@@ -17,7 +19,7 @@ HTTP/1.1 200
 `
 	ch := make(chan parsedEvent, 8)
 	go func() {
-		parseStream(strings.NewReader(input), ch)
+		parseStream(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 	var got []parsedEvent
@@ -61,8 +63,8 @@ func TestPIDFromNetnsPath(t *testing.T) {
 	}
 }
 
-func TestPidsSharingNetnsIncludesSelf(t *testing.T) {
-	pids := pidsSharingNetns(1)
+func TestPidsSharingMountNSIncludesSelf(t *testing.T) {
+	pids := pidsSharingNS(1, "mnt")
 	if len(pids) == 0 {
 		t.Fatal("expected at least pid 1")
 	}
@@ -75,6 +77,33 @@ func TestPidsSharingNetnsIncludesSelf(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("pids = %v, missing 1", pids)
+	}
+}
+
+func TestParseStreamCancelUnblocksSend(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan parsedEvent)
+	done := make(chan struct{})
+	go func() {
+		parseStream(ctx, strings.NewReader("PID:1, Comm:openssl, Payload: hello\n\n"), ch)
+		close(done)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("parseStream did not return after cancel")
+	}
+}
+
+func TestSendLatestStatusKeepsNewest(t *testing.T) {
+	ch := make(chan Status, 1)
+	sendLatestStatus(ch, Status{Detail: "a"})
+	sendLatestStatus(ch, Status{Detail: "b"})
+	st := <-ch
+	if st.Detail != "b" {
+		t.Fatalf("got %q, want b", st.Detail)
 	}
 }
 

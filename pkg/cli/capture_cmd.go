@@ -41,8 +41,9 @@ func NewCaptureCommand(ctx context.Context, version string, run func(context.Con
 capture agents, and write wire traffic to a PCAP or PCAPng file.
 
 TLS plaintext (when --tls is auto/ebpf and the workload uses OpenSSL) is written
-to --tls-out as JSONL. Keylog mode captures wire packets only; pass a client
-SSLKEYLOGFILE with --keylog-file for Wireshark/tshark decryption.`,
+to --tls-out as JSONL. auto/ebpf still attach for WatchEvents TLS status when
+--tls-out is omitted. Keylog mode captures wire packets only; --keylog-file is
+the operator's local SSLKEYLOGFILE path for Wireshark/tshark (not uploaded).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			patterns, err := ParsePodPatterns(podPatterns)
 			if err != nil {
@@ -101,9 +102,9 @@ SSLKEYLOGFILE with --keylog-file for Wireshark/tshark decryption.`,
 	cmd.Flags().BoolVar(&allowMutableImg, "allow-mutable-agent-image", false, "Allow tag-based agent image references (development/e2e)")
 	cmd.Flags().StringVar(&hubListen, "hub-listen", "", "Hub gRPC listen address (default: 0.0.0.0:ephemeral)")
 	cmd.Flags().StringVar(&hubIngest, "hub-ingest-addr", "", "Address agents dial for ingest (default: auto-detect host IP)")
-	cmd.Flags().StringVar(&tlsMode, "tls", "auto", "TLS mode: off, ebpf, keylog, or auto")
+	cmd.Flags().StringVar(&tlsMode, "tls", "auto", "TLS mode: off, ebpf, keylog, or auto (auto/ebpf always try attach for status)")
 	cmd.Flags().StringVar(&tlsOut, "tls-out", "", "JSONL file for TLS plaintext events (empty = do not write)")
-	cmd.Flags().StringVar(&keylogFile, "keylog-file", "", "NSS key log file (SSLKEYLOGFILE format) for decrypting the wire PCAP in Wireshark")
+	cmd.Flags().StringVar(&keylogFile, "keylog-file", "", "Local SSLKEYLOGFILE path for Wireshark (not uploaded; may be created during capture)")
 	_ = cmd.Flags().MarkHidden("hub-listen")
 
 	_ = cmd.MarkFlagRequired("namespace")

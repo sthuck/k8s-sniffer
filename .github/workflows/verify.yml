@@ -121,7 +121,7 @@ jobs:
         env:
           K8S_SNIFFER_E2E_ARTIFACT_DIR: ${{ github.workspace }}/test/e2e/artifacts
           E2E_GO_TAGS: e2e,e2e_tls
-          E2E_GO_RUN: TestE2E3_
+          E2E_GO_RUN: TestE2E3_1
         run: |
           set -euo pipefail
           ./test/e2e/run.sh all

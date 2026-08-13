@@ -168,6 +168,8 @@ How it works conceptually:
 - Capture **plaintext** before encrypt / after decrypt.
 - Works without private keys, without MITM, without app config — when the binary/stack is supported.
 
+Phase 3 implements the OpenSSL path (`ecapture tls` only). Go `crypto/tls` / `ecapture gotls` is follow-up; those workloads report `unsupported`.
+
 Constraints to document for users:
 
 - Needs relatively recent kernel + BPF permissions

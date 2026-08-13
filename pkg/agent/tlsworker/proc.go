@@ -9,28 +9,31 @@ import (
 	"strings"
 )
 
-func findLibSSLInNetns(pid int) (string, error) {
+func findLibSSLInContainer(pid int) (string, error) {
 	if pid <= 0 {
 		return "", fmt.Errorf("pid: required")
 	}
-	var firstErr error
-	for _, p := range pidsSharingNetns(pid) {
+	lib, err := findLibSSL(pid)
+	if err == nil {
+		return lib, nil
+	}
+	firstErr := err
+	for _, p := range pidsSharingNS(pid, "mnt") {
+		if p == pid {
+			continue
+		}
 		lib, err := findLibSSL(p)
 		if err == nil {
 			return lib, nil
 		}
-		if firstErr == nil {
-			firstErr = err
-		}
 	}
-	if firstErr != nil {
-		return "", firstErr
-	}
-	return "", fmt.Errorf("libssl.so not mapped in pid %d", pid)
+	return "", firstErr
 }
 
-func pidsSharingNetns(pid int) []int {
-	want, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/net", pid))
+// pidsSharingNS lists PIDs that share /proc/<pid>/ns/<kind> with pid.
+// Mount-ns ("mnt") scopes to one container: nginx workers share it, sidecars do not.
+func pidsSharingNS(pid int, kind string) []int {
+	want, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/%s", pid, kind))
 	if err != nil {
 		return []int{pid}
 	}
@@ -51,7 +54,7 @@ func pidsSharingNetns(pid int) []int {
 		if _, ok := seen[other]; ok {
 			continue
 		}
-		got, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/net", other))
+		got, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/%s", other, kind))
 		if err != nil || got != want {
 			continue
 		}
