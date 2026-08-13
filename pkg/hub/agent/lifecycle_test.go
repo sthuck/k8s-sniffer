@@ -87,6 +87,38 @@ func TestManagerCreateForNode(t *testing.T) {
 	}
 }
 
+func TestCreateForNodeReplacesFailedPod(t *testing.T) {
+	client := newTestClient()
+	mgr := NewManager(client, testAgentConfig())
+
+	first, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", testCreateOptions)
+	if err != nil {
+		t.Fatalf("first CreateForNode: %v", err)
+	}
+	first.Status.Phase = corev1.PodFailed
+	if _, err := client.CoreV1().Pods(cfgNamespace()).Update(context.Background(), first, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+
+	second, err := mgr.CreateForNode(context.Background(), "sess-1", "node-a", CreateOptions{StreamID: "stream-2"})
+	if err != nil {
+		t.Fatalf("replace CreateForNode: %v", err)
+	}
+	if second.Name == first.Name {
+		t.Fatal("expected a new agent pod after failed predecessor")
+	}
+	agents, err := mgr.ListSessionAgents(context.Background(), "sess-1")
+	if err != nil {
+		t.Fatalf("ListSessionAgents: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("listed %d agents, want 1", len(agents))
+	}
+	if agents[0].Name != second.Name {
+		t.Fatalf("remaining agent = %q, want %q", agents[0].Name, second.Name)
+	}
+}
+
 func TestCreateForNodeIdempotentPerNode(t *testing.T) {
 	client := newTestClient()
 	mgr := NewManager(client, testAgentConfig())

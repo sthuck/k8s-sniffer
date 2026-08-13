@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
@@ -33,38 +35,90 @@ func (h *Hub) watchPods(sess *sessionState, spec capture.Spec) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	var watchCh <-chan watch.Event
-	watcher, err := h.opts.Kubernetes.CoreV1().Pods(spec.Namespace).Watch(sess.context(), metav1.ListOptions{})
-	if err != nil {
-		hubLog.Info("pod watch failed; polling for live attach/detach",
-			slog.String("session_id", sess.proto.Id),
-			slog.String("namespace", spec.Namespace),
-			slog.String("err", err.Error()),
-		)
-	} else {
-		defer watcher.Stop()
-		watchCh = watcher.ResultChan()
+	var (
+		watcher watch.Interface
+		watchCh <-chan watch.Event
+		rv      string
+	)
+	stopWatch := func() {
+		if watcher != nil {
+			watcher.Stop()
+			watcher = nil
+		}
+		watchCh = nil
+	}
+	defer stopWatch()
+
+	startWatch := func() {
+		stopWatch()
+		opts := metav1.ListOptions{}
+		if rv != "" {
+			opts.ResourceVersion = rv
+		}
+		w, err := h.opts.Kubernetes.CoreV1().Pods(spec.Namespace).Watch(sess.context(), opts)
+		if err != nil {
+			hubLog.Info("pod watch failed; polling for live attach/detach",
+				slog.String("session_id", sess.proto.Id),
+				slog.String("namespace", spec.Namespace),
+				slog.String("err", err.Error()),
+			)
+			return
+		}
+		watcher = w
+		watchCh = w.ResultChan()
 		hubLog.Debug("pod watch started",
 			slog.String("session_id", sess.proto.Id),
 			slog.String("namespace", spec.Namespace),
 		)
 	}
 
+	startWatch()
 	h.reconcileSession(sess, spec)
 	for {
 		select {
 		case <-sess.done():
 			return
 		case <-ticker.C:
+			if watchCh == nil {
+				startWatch()
+			}
 			h.reconcileSession(sess, spec)
-		case _, ok := <-watchCh:
+		case ev, ok := <-watchCh:
 			if !ok {
-				watchCh = nil
+				hubLog.Debug("pod watch closed; reconnecting",
+					slog.String("session_id", sess.proto.Id),
+				)
+				startWatch()
+				h.reconcileSession(sess, spec)
 				continue
+			}
+			if ev.Type == watch.Error {
+				if isExpiredWatch(ev.Object) {
+					rv = ""
+				}
+				hubLog.Info("pod watch error; reconnecting",
+					slog.String("session_id", sess.proto.Id),
+				)
+				startWatch()
+				h.reconcileSession(sess, spec)
+				continue
+			}
+			if meta, ok := ev.Object.(metav1.Object); ok {
+				if v := meta.GetResourceVersion(); v != "" {
+					rv = v
+				}
 			}
 			h.reconcileSession(sess, spec)
 		}
 	}
+}
+
+func isExpiredWatch(obj runtime.Object) bool {
+	if obj == nil {
+		return false
+	}
+	err := apierrors.FromObject(obj)
+	return apierrors.IsResourceExpired(err) || apierrors.IsGone(err)
 }
 
 func (h *Hub) runStats(sess *sessionState) {
@@ -147,24 +201,6 @@ func (h *Hub) reconcileSession(sess *sessionState, spec capture.Spec) {
 			},
 		})
 	}
-	for uid, ref := range desiredUIDs {
-		if _, ok := current[uid]; ok {
-			continue
-		}
-		hubLog.Info("pod attached",
-			slog.String("session_id", sessionID),
-			slog.String("pod", ref.GetName()),
-			slog.String("node", ref.GetNode()),
-		)
-		sess.emit(&snifferv1.SessionEvent{
-			SessionId: sessionID,
-			Severity:  snifferv1.Severity_SEVERITY_INFO,
-			Message:   fmt.Sprintf("matched pod %s on node %s", ref.GetName(), ref.GetNode()),
-			Payload: &snifferv1.SessionEvent_PodAttached{
-				PodAttached: &snifferv1.PodAttached{Pod: ref},
-			},
-		})
-	}
 
 	nodes := make(map[string]struct{})
 	for node := range desired {
@@ -220,46 +256,63 @@ func (h *Hub) reconcileSession(sess *sessionState, spec capture.Spec) {
 
 func (h *Hub) ensureNodeAgent(sess *sessionState, spec capture.Spec, group discovery.NodeGroup) error {
 	sessionID := sess.proto.Id
-	if existing, ok := sess.assignmentForNode(group.Node); ok {
-		if assignmentTargetsEqual(existing, group) {
+	node := group.Node
+
+	_, found, err := h.agents.AgentOnNode(sess.context(), sessionID, node)
+	if err != nil {
+		return err
+	}
+	if !found {
+		sess.removeAgent(node)
+	}
+
+	if found {
+		if existing, ok := sess.assignmentForNode(node); ok {
+			if assignmentTargetsEqual(existing, group) {
+				return nil
+			}
+			updated := buildAssignment(sessionID, group, spec, existing.GetStreamId())
+			sess.updateAssignment(node, updated)
+			hubLog.Info("agent targets updated",
+				slog.String("session_id", sessionID),
+				slog.String("node", node),
+				slog.Int("targets", len(group.Targets)),
+			)
+			sess.emit(&snifferv1.SessionEvent{
+				SessionId: sessionID,
+				Severity:  snifferv1.Severity_SEVERITY_INFO,
+				Message:   fmt.Sprintf("agent targets updated on node %s", node),
+				Payload: &snifferv1.SessionEvent_AgentState{
+					AgentState: &snifferv1.AgentStateChanged{
+						Node:    node,
+						Phase:   snifferv1.AgentPhase_AGENT_PHASE_CAPTURING,
+						Targets: targetsFromAssignment(updated),
+					},
+				},
+			})
+			emitNewAttaches(sess, sessionID, existing, group)
 			return nil
 		}
-		updated := buildAssignment(sessionID, group, spec, existing.GetStreamId())
-		sess.updateAssignment(group.Node, updated)
-		hubLog.Info("agent targets updated",
-			slog.String("session_id", sessionID),
-			slog.String("node", group.Node),
-			slog.Int("targets", len(group.Targets)),
-		)
-		sess.emit(&snifferv1.SessionEvent{
-			SessionId: sessionID,
-			Severity:  snifferv1.Severity_SEVERITY_INFO,
-			Message:   fmt.Sprintf("agent targets updated on node %s", group.Node),
-			Payload: &snifferv1.SessionEvent_AgentState{
-				AgentState: &snifferv1.AgentStateChanged{
-					Node:    group.Node,
-					Phase:   snifferv1.AgentPhase_AGENT_PHASE_CAPTURING,
-					Targets: targetsFromAssignment(updated),
-				},
-			},
-		})
-		return nil
 	}
 
 	if err := sess.context().Err(); err != nil {
 		return err
 	}
-	if sess.snapshot().GetState() != snifferv1.SessionState_SESSION_STATE_RUNNING &&
-		sess.snapshot().GetState() != snifferv1.SessionState_SESSION_STATE_STARTING {
+	if !sessionScheduling(sess.snapshot().GetState()) {
 		return fmt.Errorf("session not active")
 	}
 
+	if !sess.beginEnsure(node) {
+		return nil
+	}
+	defer sess.endEnsure(node)
+
 	requestedStreamID := uuid.NewString()
 	createOpts := agent.CreateOptions{
-		ActiveDeadline: spec.Duration,
+		ActiveDeadline: remainingActiveDeadline(spec.Duration, sess.createdAt()),
 		StreamID:       requestedStreamID,
 	}
-	pod, err := h.agents.CreateForNode(sess.context(), sessionID, group.Node, createOpts)
+	pod, err := h.agents.CreateForNode(sess.context(), sessionID, node, createOpts)
 	if err != nil {
 		return err
 	}
@@ -268,15 +321,15 @@ func (h *Hub) ensureNodeAgent(sess *sessionState, spec capture.Spec, group disco
 		return err
 	}
 	assignment := buildAssignment(sessionID, group, spec, streamID)
-	sess.recordAgent(group.Node, pod.Name, streamID, assignment)
+	sess.recordAgent(node, pod.Name, streamID, assignment)
 
 	sess.emit(&snifferv1.SessionEvent{
 		SessionId: sessionID,
 		Severity:  snifferv1.Severity_SEVERITY_INFO,
-		Message:   fmt.Sprintf("scheduling agent %s on node %s", pod.Name, group.Node),
+		Message:   fmt.Sprintf("scheduling agent %s on node %s", pod.Name, node),
 		Payload: &snifferv1.SessionEvent_AgentState{
 			AgentState: &snifferv1.AgentStateChanged{
-				Node:     group.Node,
+				Node:     node,
 				AgentPod: pod.Name,
 				Phase:    snifferv1.AgentPhase_AGENT_PHASE_SCHEDULING,
 				Targets:  targetsFromAssignment(assignment),
@@ -284,28 +337,46 @@ func (h *Hub) ensureNodeAgent(sess *sessionState, spec capture.Spec, group disco
 		},
 	})
 
-	if err := h.agents.WaitReady(sess.context(), sessionID, pod); err != nil {
-		return fmt.Errorf("wait for agent on node %q: %w", group.Node, err)
+	sess.reconcileMu.Unlock()
+	waitErr := h.agents.WaitReady(sess.context(), sessionID, pod)
+	sess.reconcileMu.Lock()
+
+	if waitErr != nil {
+		h.abandonNodeAgent(sess, node)
+		return fmt.Errorf("wait for agent on node %q: %w", node, waitErr)
 	}
-	if sess.snapshot().GetState() != snifferv1.SessionState_SESSION_STATE_RUNNING &&
-		sess.snapshot().GetState() != snifferv1.SessionState_SESSION_STATE_STARTING {
-		return fmt.Errorf("session stopped while waiting for agent on node %q", group.Node)
+	if !sessionScheduling(sess.snapshot().GetState()) {
+		h.abandonNodeAgent(sess, node)
+		return fmt.Errorf("session stopped while waiting for agent on node %q", node)
 	}
 
 	sess.emit(&snifferv1.SessionEvent{
 		SessionId: sessionID,
 		Severity:  snifferv1.Severity_SEVERITY_INFO,
-		Message:   fmt.Sprintf("agent %s ready on node %s", pod.Name, group.Node),
+		Message:   fmt.Sprintf("agent %s ready on node %s", pod.Name, node),
 		Payload: &snifferv1.SessionEvent_AgentState{
 			AgentState: &snifferv1.AgentStateChanged{
-				Node:     group.Node,
+				Node:     node,
 				AgentPod: pod.Name,
 				Phase:    snifferv1.AgentPhase_AGENT_PHASE_READY,
 				Targets:  targetsFromAssignment(assignment),
 			},
 		},
 	})
+	emitNewAttaches(sess, sessionID, nil, group)
 	return nil
+}
+
+func (h *Hub) abandonNodeAgent(sess *sessionState, node string) {
+	sessionID := sess.proto.Id
+	if err := h.agents.DeleteAgentOnNode(sess.context(), sessionID, node); err != nil && sess.context().Err() == nil {
+		hubLog.Info("failed to delete agent after wait error",
+			slog.String("session_id", sessionID),
+			slog.String("node", node),
+			slog.String("err", err.Error()),
+		)
+	}
+	sess.removeAgent(node)
 }
 
 func (h *Hub) removeNodeAgent(sess *sessionState, node string) error {
@@ -375,4 +446,52 @@ func assignmentTargetsEqual(assignment *snifferv1.AgentAssignment, group discove
 		}
 	}
 	return true
+}
+
+func emitNewAttaches(sess *sessionState, sessionID string, prev *snifferv1.AgentAssignment, group discovery.NodeGroup) {
+	had := make(map[string]struct{})
+	if prev != nil {
+		for _, t := range prev.GetTargets() {
+			if uid := t.GetPod().GetUid(); uid != "" {
+				had[uid] = struct{}{}
+			}
+		}
+	}
+	for _, pod := range group.Targets {
+		if _, ok := had[pod.GetUid()]; ok {
+			continue
+		}
+		hubLog.Info("pod attached",
+			slog.String("session_id", sessionID),
+			slog.String("pod", pod.GetName()),
+			slog.String("node", pod.GetNode()),
+		)
+		sess.emit(&snifferv1.SessionEvent{
+			SessionId: sessionID,
+			Severity:  snifferv1.Severity_SEVERITY_INFO,
+			Message:   fmt.Sprintf("matched pod %s on node %s", pod.GetName(), pod.GetNode()),
+			Payload: &snifferv1.SessionEvent_PodAttached{
+				PodAttached: &snifferv1.PodAttached{Pod: pod},
+			},
+		})
+	}
+}
+
+func remainingActiveDeadline(duration time.Duration, createdAt time.Time) time.Duration {
+	if duration <= 0 {
+		return 0
+	}
+	if createdAt.IsZero() {
+		return duration
+	}
+	left := duration - time.Since(createdAt)
+	if left <= 0 {
+		return 0
+	}
+	return left
+}
+
+func sessionScheduling(state snifferv1.SessionState) bool {
+	return state == snifferv1.SessionState_SESSION_STATE_STARTING ||
+		state == snifferv1.SessionState_SESSION_STATE_RUNNING
 }

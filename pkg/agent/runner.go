@@ -145,7 +145,8 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 	var capturesMu sync.Mutex
 	captures := make(map[string]*runningCapture)
-	captureErrs := make(chan error, 8)
+	var captureErrMu sync.Mutex
+	var captureErrs []error
 
 	startTarget := func(asg *snifferv1.AgentAssignment, target *snifferv1.Target) {
 		uid := target.GetPod().GetUid()
@@ -171,10 +172,9 @@ func (r *Runner) Run(ctx context.Context) error {
 				slog.String("pod", pod.GetName()),
 				slog.String("err", err.Error()),
 			)
-			select {
-			case captureErrs <- fmt.Errorf("target %s/%s: %w", pod.GetNamespace(), pod.GetName(), err):
-			default:
-			}
+			captureErrMu.Lock()
+			captureErrs = append(captureErrs, fmt.Errorf("target %s/%s: %w", pod.GetNamespace(), pod.GetName(), err))
+			captureErrMu.Unlock()
 			if ctx.Err() == nil {
 				r.reportCaptureError(context.WithoutCancel(ctx), client, asg, cfg.AgentPod, target, err)
 			}
@@ -263,16 +263,9 @@ func (r *Runner) Run(ctx context.Context) error {
 	close(batchCh)
 	senderErr := <-senderDone
 
-	var errs []error
-drainErrs:
-	for {
-		select {
-		case err := <-captureErrs:
-			errs = append(errs, err)
-		default:
-			break drainErrs
-		}
-	}
+	captureErrMu.Lock()
+	errs := append([]error(nil), captureErrs...)
+	captureErrMu.Unlock()
 	if senderErr != nil && !errors.Is(senderErr, context.Canceled) {
 		errs = append(errs, senderErr)
 	}

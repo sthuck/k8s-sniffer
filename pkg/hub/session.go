@@ -49,6 +49,8 @@ type sessionState struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	stopOnce     sync.Once
+	ensuringMu   sync.Mutex
+	ensuring     map[string]struct{}
 	agents       map[string]agentRecord
 	assigns      map[string]*snifferv1.AgentAssignment
 	stateChange  chan struct{}
@@ -70,6 +72,7 @@ func newSessionState(id string, spec *snifferv1.CaptureSpec) *sessionState {
 		packets:      newPacketLog(),
 		ctx:          ctx,
 		cancel:       cancel,
+		ensuring:     make(map[string]struct{}),
 		agents:       make(map[string]agentRecord),
 		assigns:      make(map[string]*snifferv1.AgentAssignment),
 		stateChange:  make(chan struct{}),
@@ -152,6 +155,32 @@ func (s *sessionState) emitState(sessionID string, state snifferv1.SessionState)
 			SessionState: &snifferv1.SessionStateChanged{State: state},
 		},
 	})
+}
+
+func (s *sessionState) createdAt() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ts := s.proto.GetCreatedAt()
+	if ts == nil {
+		return time.Time{}
+	}
+	return ts.AsTime()
+}
+
+func (s *sessionState) beginEnsure(node string) bool {
+	s.ensuringMu.Lock()
+	defer s.ensuringMu.Unlock()
+	if _, ok := s.ensuring[node]; ok {
+		return false
+	}
+	s.ensuring[node] = struct{}{}
+	return true
+}
+
+func (s *sessionState) endEnsure(node string) {
+	s.ensuringMu.Lock()
+	defer s.ensuringMu.Unlock()
+	delete(s.ensuring, node)
 }
 
 func (s *sessionState) recordAgent(node, podName, streamID string, assignment *snifferv1.AgentAssignment) {
@@ -386,7 +415,7 @@ func (s *sessionState) validateCaptureBatch(batch *snifferv1.CaptureBatch) error
 	return nil
 }
 
-func (s *sessionState) commitCaptureRecord(node, streamID string, record *snifferv1.CaptureRecord) error {
+func (s *sessionState) commitCaptureRecord(node, streamID string, record *snifferv1.CaptureRecord, countPacket bool) error {
 	frame := record.GetWireFrame()
 	if frame == nil {
 		return nil
@@ -402,6 +431,9 @@ func (s *sessionState) commitCaptureRecord(node, streamID string, record *sniffe
 	}
 	rec.lastSequence = frame.GetSequence()
 	s.agents[node] = rec
+	if !countPacket {
+		return nil
+	}
 	n := int(frame.GetOriginalLength())
 	if n == 0 {
 		n = len(frame.GetPayload())
@@ -516,12 +548,25 @@ func validateCaptureRecord(record *snifferv1.CaptureRecord, assignment *snifferv
 	}
 	target := assignedTarget(assignment, pod)
 	if target == nil {
-		return 0, fmt.Errorf("pod is not assigned to this agent")
+		return len(payload), nil
 	}
 	if record.GetTlsEvent() != nil && target.GetTlsMode() == snifferv1.TlsMode_TLS_MODE_OFF {
 		return 0, fmt.Errorf("TLS events are disabled for this target")
 	}
 	return len(payload), nil
+}
+
+func captureRecordPod(record *snifferv1.CaptureRecord) *snifferv1.PodRef {
+	if record == nil {
+		return nil
+	}
+	if frame := record.GetWireFrame(); frame != nil {
+		return frame.GetPod()
+	}
+	if event := record.GetTlsEvent(); event != nil {
+		return event.GetPod()
+	}
+	return nil
 }
 
 func assignedTarget(assignment *snifferv1.AgentAssignment, pod *snifferv1.PodRef) *snifferv1.Target {

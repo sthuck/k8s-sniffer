@@ -109,10 +109,13 @@ func (m *Manager) AgentOnNode(ctx context.Context, sessionID, nodeName string) (
 		slog.String("selector", selector),
 		slog.Int("count", len(list.Items)),
 	)
-	if len(list.Items) == 0 {
-		return nil, false, nil
+	for i := range list.Items {
+		pod := &list.Items[i]
+		if podReusable(pod) {
+			return pod, true, nil
+		}
 	}
-	return &list.Items[0], true, nil
+	return nil, false, nil
 }
 
 // CreateForNode builds and creates an agent pod on nodeName for sessionID. If an
@@ -130,6 +133,9 @@ func (m *Manager) CreateForNode(ctx context.Context, sessionID, nodeName string,
 			slog.String("pod", existing.Name),
 		)
 		return existing, nil
+	}
+	if err := m.DeleteAgentOnNode(ctx, sessionID, nodeName); err != nil {
+		return nil, err
 	}
 
 	pod, err := PodManifest(sessionID, opts.StreamID, nodeName, m.cfg, opts.ActiveDeadline)
@@ -226,6 +232,18 @@ func isRetriableAPIError(err error) bool {
 		apierrors.IsServiceUnavailable(err) ||
 		apierrors.IsTooManyRequests(err) ||
 		apierrors.IsInternalError(err)
+}
+
+func podReusable(pod *corev1.Pod) bool {
+	if pod == nil || pod.DeletionTimestamp != nil {
+		return false
+	}
+	switch pod.Status.Phase {
+	case corev1.PodFailed, corev1.PodSucceeded:
+		return false
+	default:
+		return true
+	}
 }
 
 func podTerminalReason(pod *corev1.Pod) string {
