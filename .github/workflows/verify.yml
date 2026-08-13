@@ -54,7 +54,7 @@ jobs:
 
   e2e-kind:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -76,7 +76,7 @@ jobs:
           kind version
           kubectl version --client
 
-      - name: Kind e2e (E2E1.1)
+      - name: Kind e2e (E2E1.1, E2E2.1, E2E2.3)
         env:
           K8S_SNIFFER_E2E_ARTIFACT_DIR: ${{ github.workspace }}/test/e2e/artifacts
         run: |

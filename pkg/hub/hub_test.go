@@ -86,9 +86,11 @@ func startTestHubServices(
 ) (snifferv1.HubServiceClient, snifferv1.AgentIngestServiceClient, func()) {
 	t.Helper()
 	h, err := hub.New(hub.Options{
-		Kubernetes:   client,
-		Agent:        testAgentConfig(),
-		ReadyTimeout: 5 * time.Second,
+		Kubernetes:    client,
+		Agent:         testAgentConfig(),
+		ReadyTimeout:  5 * time.Second,
+		WatchInterval: 20 * time.Millisecond,
+		StatsInterval: 50 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -447,4 +449,238 @@ func TestWatchEventsReplayIncludesSessionState(t *testing.T) {
 	if ev.GetSessionState() == nil {
 		t.Fatalf("expected session state event, got %+v", ev.GetPayload())
 	}
+}
+
+func TestLiveWatchAttachesPodOnExistingNode(t *testing.T) {
+	client := newTestKubernetes(testWorkloadPods()...)
+	hubClient, ingestClient, cleanup := startTestHubServices(t, client)
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	created, err := hubClient.CreateSession(ctx, &snifferv1.CreateSessionRequest{
+		Spec: &snifferv1.CaptureSpec{
+			Namespace:   "prod",
+			PodPatterns: []string{"payments-.*"},
+			TlsMode:     snifferv1.TlsMode_TLS_MODE_OFF,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	sessionID := created.GetSession().GetId()
+	node := created.GetSession().GetNodes()[0]
+	agentPod, streamID := sessionAgentIdentity(t, client, sessionID, node)
+
+	packets, err := hubClient.SubscribePackets(ctx, &snifferv1.SubscribePacketsRequest{SessionId: sessionID})
+	if err != nil {
+		t.Fatalf("SubscribePackets: %v", err)
+	}
+	go func() { _, _ = packets.Recv() }()
+
+	watchCtx := metadata.AppendToOutgoingContext(
+		ctx,
+		capture.AgentStreamMetadataKey, streamID,
+		capture.AgentPodMetadataKey, agentPod,
+	)
+	targets, err := ingestClient.WatchTargets(watchCtx, &snifferv1.WatchTargetsRequest{
+		SessionId: sessionID,
+		Node:      node,
+		AgentPod:  agentPod,
+	})
+	if err != nil {
+		t.Fatalf("WatchTargets: %v", err)
+	}
+	first, err := targets.Recv()
+	if err != nil {
+		t.Fatalf("first assignment: %v", err)
+	}
+	if len(first.GetTargets()) != 1 {
+		t.Fatalf("initial targets = %d, want 1", len(first.GetTargets()))
+	}
+
+	_, err = client.CoreV1().Pods("prod").Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments-extra", Namespace: "prod", UID: "uid-extra"},
+		Spec:       corev1.PodSpec{NodeName: node},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("create extra pod: %v", err)
+	}
+
+	updated := make(chan *snifferv1.AgentAssignment, 1)
+	go func() {
+		a, err := targets.Recv()
+		if err != nil {
+			return
+		}
+		updated <- a
+	}()
+	select {
+	case a := <-updated:
+		if len(a.GetTargets()) != 2 {
+			t.Fatalf("updated targets = %d, want 2", len(a.GetTargets()))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("WatchTargets did not receive hot-update for new pod on same node")
+	}
+
+	agents, err := client.CoreV1().Pods("k8s-sniffer").List(ctx, metav1.ListOptions{
+		LabelSelector: mustSessionSelector(t, sessionID),
+	})
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	if len(agents.Items) != 1 {
+		t.Fatalf("agent pods = %d, want 1 (hot-update must not respawn)", len(agents.Items))
+	}
+}
+
+func TestLiveWatchSpawnsAndRemovesNodeAgent(t *testing.T) {
+	client := newTestKubernetes(testWorkloadPods()...)
+	hubClient, cleanup := startTestHub(t, client)
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	created, err := hubClient.CreateSession(ctx, &snifferv1.CreateSessionRequest{
+		Spec: &snifferv1.CaptureSpec{
+			Namespace:   "prod",
+			PodPatterns: []string{"payments-.*", "checkout-.*"},
+			TlsMode:     snifferv1.TlsMode_TLS_MODE_OFF,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	sessionID := created.GetSession().GetId()
+	packets, err := hubClient.SubscribePackets(ctx, &snifferv1.SubscribePacketsRequest{SessionId: sessionID})
+	if err != nil {
+		t.Fatalf("SubscribePackets: %v", err)
+	}
+	go func() { _, _ = packets.Recv() }()
+
+	_, err = client.CoreV1().Pods("prod").Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "payments-west", Namespace: "prod", UID: "uid-west"},
+		Spec:       corev1.PodSpec{NodeName: "node-c"},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("create pod on new node: %v", err)
+	}
+
+	waitHub(t, 2*time.Second, func() bool {
+		agents, err := client.CoreV1().Pods("k8s-sniffer").List(ctx, metav1.ListOptions{
+			LabelSelector: mustSessionSelector(t, sessionID),
+		})
+		return err == nil && len(agents.Items) == 3
+	})
+
+	if err := client.CoreV1().Pods("prod").Delete(ctx, "checkout-web", metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("delete checkout-web: %v", err)
+	}
+	waitHub(t, 2*time.Second, func() bool {
+		agents, err := client.CoreV1().Pods("k8s-sniffer").List(ctx, metav1.ListOptions{
+			LabelSelector: mustSessionSelector(t, sessionID),
+		})
+		if err != nil || len(agents.Items) != 2 {
+			return false
+		}
+		for _, p := range agents.Items {
+			if p.Spec.NodeName == "node-b" {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+func TestSessionStatsEmittedAfterPackets(t *testing.T) {
+	client := newTestKubernetes(testWorkloadPods()...)
+	hubClient, ingestClient, cleanup := startTestHubServices(t, client)
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	created, err := hubClient.CreateSession(ctx, &snifferv1.CreateSessionRequest{
+		Spec: &snifferv1.CaptureSpec{
+			Namespace:   "prod",
+			PodPatterns: []string{"payments-.*"},
+			TlsMode:     snifferv1.TlsMode_TLS_MODE_OFF,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	session := created.GetSession()
+	node := session.GetNodes()[0]
+	agentPod, streamID := sessionAgentIdentity(t, client, session.GetId(), node)
+
+	events, err := hubClient.WatchEvents(ctx, &snifferv1.WatchEventsRequest{
+		SessionId:     session.GetId(),
+		ReplayHistory: true,
+	})
+	if err != nil {
+		t.Fatalf("WatchEvents: %v", err)
+	}
+	packets, err := hubClient.SubscribePackets(ctx, &snifferv1.SubscribePacketsRequest{SessionId: session.GetId()})
+	if err != nil {
+		t.Fatalf("SubscribePackets: %v", err)
+	}
+	go func() { _, _ = packets.Recv() }()
+
+	ingestCtx := metadata.AppendToOutgoingContext(
+		ctx,
+		capture.AgentStreamMetadataKey, streamID,
+		capture.AgentPodMetadataKey, agentPod,
+	)
+	ingest, err := ingestClient.StreamCapture(ingestCtx)
+	if err != nil {
+		t.Fatalf("StreamCapture: %v", err)
+	}
+	pod := &snifferv1.PodRef{Namespace: "prod", Name: "payments-api", Uid: "uid-1", Node: node}
+	if err := ingest.Send(&snifferv1.CaptureBatch{
+		SessionId: session.GetId(),
+		Node:      node,
+		StreamId:  streamID,
+		Records: []*snifferv1.CaptureRecord{{
+			Record: &snifferv1.CaptureRecord_WireFrame{
+				WireFrame: &snifferv1.PacketFrame{
+					Pod:            pod,
+					Source:         snifferv1.PacketSource_PACKET_SOURCE_WIRE,
+					Timestamp:      timestamppb.Now(),
+					LinkType:       snifferv1.LinkType_LINK_TYPE_ETHERNET,
+					OriginalLength: 3,
+					Payload:        []byte{1, 2, 3},
+					Sequence:       1,
+				},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		ev, err := events.Recv()
+		if err != nil {
+			t.Fatalf("WatchEvents Recv: %v", err)
+		}
+		if stats := ev.GetStats(); stats != nil && stats.GetPackets() >= 1 && stats.GetBytes() >= 3 {
+			return
+		}
+	}
+	t.Fatal("did not receive SessionStats with packets >= 1")
+}
+
+func waitHub(t *testing.T, timeout time.Duration, fn func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("condition not met")
 }

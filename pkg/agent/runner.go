@@ -34,8 +34,13 @@ type Capturer interface {
 	Start(context.Context, string, uint32, string, []string) (io.ReadCloser, error)
 }
 
+// AssignmentWatcher is a WatchTargets stream that yields target list updates.
+type AssignmentWatcher interface {
+	Recv() (*snifferv1.AgentAssignment, error)
+}
+
 type HubClient interface {
-	WatchTargets(context.Context, string, string, string, string) (*snifferv1.AgentAssignment, error)
+	WatchTargets(context.Context, string, string, string, string) (AssignmentWatcher, error)
 	StreamCapture(context.Context, string, string) (snifferv1.AgentIngestService_StreamCaptureClient, error)
 	ReportStatus(context.Context, *snifferv1.ReportStatusRequest, string) error
 	Close() error
@@ -49,13 +54,37 @@ type Runner struct {
 func NewRunner(opts RunnerOptions) *Runner {
 	if opts.Dial == nil {
 		opts.Dial = func(ctx context.Context, addr string) (HubClient, error) {
-			return hubclient.Dial(ctx, addr)
+			c, err := hubclient.Dial(ctx, addr)
+			if err != nil {
+				return nil, err
+			}
+			return &grpcHubClient{inner: c}, nil
 		}
 	}
 	return &Runner{opts: opts}
 }
 
-// Run blocks until ctx is cancelled or all captures finish.
+type grpcHubClient struct {
+	inner *hubclient.Client
+}
+
+func (c *grpcHubClient) WatchTargets(ctx context.Context, sessionID, node, agentPod, streamID string) (AssignmentWatcher, error) {
+	return c.inner.WatchTargets(ctx, sessionID, node, agentPod, streamID)
+}
+
+func (c *grpcHubClient) StreamCapture(ctx context.Context, agentPod, streamID string) (snifferv1.AgentIngestService_StreamCaptureClient, error) {
+	return c.inner.StreamCapture(ctx, agentPod, streamID)
+}
+
+func (c *grpcHubClient) ReportStatus(ctx context.Context, req *snifferv1.ReportStatusRequest, agentPod string) error {
+	return c.inner.ReportStatus(ctx, req, agentPod)
+}
+
+func (c *grpcHubClient) Close() error {
+	return c.inner.Close()
+}
+
+// Run blocks until ctx is cancelled or the target watch ends.
 func (r *Runner) Run(ctx context.Context) error {
 	cfg := r.opts.Config
 	if err := cfg.Validate(); err != nil {
@@ -68,13 +97,20 @@ func (r *Runner) Run(ctx context.Context) error {
 		return fmt.Errorf("capturer: required")
 	}
 
-	client, err := r.opts.Dial(ctx, cfg.HubAddr)
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+
+	client, err := r.opts.Dial(runCtx, cfg.HubAddr)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
-	assignment, err := client.WatchTargets(ctx, cfg.SessionID, cfg.Node, cfg.AgentPod, cfg.StreamID)
+	watch, err := client.WatchTargets(runCtx, cfg.SessionID, cfg.Node, cfg.AgentPod, cfg.StreamID)
+	if err != nil {
+		return err
+	}
+	assignment, err := watch.Recv()
 	if err != nil {
 		return err
 	}
@@ -87,9 +123,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		slog.Int("targets", len(assignment.GetTargets())),
 	)
 
-	// Capture stops when ctx is cancelled; the ingest stream stays open until
-	// partial batches are drained so short sessions do not drop frames.
-	captureCtx, captureCancel := context.WithCancel(ctx)
+	captureCtx, captureCancel := context.WithCancel(runCtx)
 	defer captureCancel()
 	streamCtx, streamCancel := context.WithCancel(context.Background())
 	defer streamCancel()
@@ -105,14 +139,28 @@ func (r *Runner) Run(ctx context.Context) error {
 		senderDone <- r.sendBatches(stream, batchCh, captureCancel)
 	}()
 
-	var captureWG sync.WaitGroup
-	captureErrs := make(chan error, len(assignment.GetTargets()))
-	for _, target := range assignment.GetTargets() {
-		target := target
-		captureWG.Add(1)
+	type runningCapture struct {
+		cancel context.CancelFunc
+		done   chan struct{}
+	}
+	var capturesMu sync.Mutex
+	captures := make(map[string]*runningCapture)
+	captureErrs := make(chan error, 8)
+
+	startTarget := func(asg *snifferv1.AgentAssignment, target *snifferv1.Target) {
+		uid := target.GetPod().GetUid()
+		capturesMu.Lock()
+		if _, ok := captures[uid]; ok {
+			capturesMu.Unlock()
+			return
+		}
+		tctx, tcancel := context.WithCancel(captureCtx)
+		rt := &runningCapture{cancel: tcancel, done: make(chan struct{})}
+		captures[uid] = rt
+		capturesMu.Unlock()
 		go func() {
-			defer captureWG.Done()
-			err := r.captureTarget(captureCtx, assignment, target, batchCh)
+			defer close(rt.done)
+			err := r.captureTarget(tctx, asg, target, batchCh)
 			if err == nil || errors.Is(err, context.Canceled) {
 				return
 			}
@@ -123,26 +171,107 @@ func (r *Runner) Run(ctx context.Context) error {
 				slog.String("pod", pod.GetName()),
 				slog.String("err", err.Error()),
 			)
-			captureErrs <- fmt.Errorf("target %s/%s: %w", pod.GetNamespace(), pod.GetName(), err)
+			select {
+			case captureErrs <- fmt.Errorf("target %s/%s: %w", pod.GetNamespace(), pod.GetName(), err):
+			default:
+			}
 			if ctx.Err() == nil {
-				r.reportCaptureError(context.WithoutCancel(ctx), client, assignment, cfg.AgentPod, target, err)
+				r.reportCaptureError(context.WithoutCancel(ctx), client, asg, cfg.AgentPod, target, err)
 			}
 		}()
 	}
+	stopTarget := func(uid string) {
+		capturesMu.Lock()
+		rt, ok := captures[uid]
+		if ok {
+			delete(captures, uid)
+		}
+		capturesMu.Unlock()
+		if !ok {
+			return
+		}
+		rt.cancel()
+		<-rt.done
+	}
+	apply := func(asg *snifferv1.AgentAssignment) {
+		if err := validateAssignment(cfg, asg); err != nil {
+			agentLog.Info("invalid assignment update",
+				slog.String("session_id", cfg.SessionID),
+				slog.String("err", err.Error()),
+			)
+			return
+		}
+		desired := make(map[string]*snifferv1.Target, len(asg.GetTargets()))
+		for _, target := range asg.GetTargets() {
+			desired[target.GetPod().GetUid()] = target
+		}
+		capturesMu.Lock()
+		var removed []string
+		for uid := range captures {
+			if _, ok := desired[uid]; !ok {
+				removed = append(removed, uid)
+			}
+		}
+		capturesMu.Unlock()
+		for _, uid := range removed {
+			agentLog.Info("stopping capture for detached target",
+				slog.String("session_id", cfg.SessionID),
+				slog.String("pod_uid", uid),
+			)
+			stopTarget(uid)
+		}
+		for _, target := range desired {
+			startTarget(asg, target)
+		}
+	}
 
-	capturesDone := make(chan struct{})
+	apply(assignment)
+
+	watchDone := make(chan error, 1)
 	go func() {
-		captureWG.Wait()
-		close(batchCh)
-		close(captureErrs)
-		close(capturesDone)
+		for {
+			next, err := watch.Recv()
+			if err != nil {
+				watchDone <- err
+				return
+			}
+			agentLog.Info("assignment updated",
+				slog.String("session_id", cfg.SessionID),
+				slog.Int("targets", len(next.GetTargets())),
+			)
+			apply(next)
+		}
 	}()
 
+	select {
+	case <-ctx.Done():
+	case <-watchDone:
+	case <-captureCtx.Done():
+	}
+	captureCancel()
+
+	capturesMu.Lock()
+	remaining := make([]*runningCapture, 0, len(captures))
+	for _, rt := range captures {
+		remaining = append(remaining, rt)
+	}
+	capturesMu.Unlock()
+	for _, rt := range remaining {
+		rt.cancel()
+		<-rt.done
+	}
+	close(batchCh)
 	senderErr := <-senderDone
-	<-capturesDone
+
 	var errs []error
-	for err := range captureErrs {
-		errs = append(errs, err)
+drainErrs:
+	for {
+		select {
+		case err := <-captureErrs:
+			errs = append(errs, err)
+		default:
+			break drainErrs
+		}
 	}
 	if senderErr != nil && !errors.Is(senderErr, context.Canceled) {
 		errs = append(errs, senderErr)

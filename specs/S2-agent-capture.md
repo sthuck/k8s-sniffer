@@ -29,6 +29,8 @@ Flow:
 2. `hubclient.Dial` connects to `AgentIngestService`.
 3. `WatchTargets` authenticates the pod, then waits for the session to be
    `RUNNING` and for a packet subscriber before delivering `AgentAssignment`.
+   Subsequent Recv()s yield target-list updates (T2.2) until the agent is
+   removed or the session stops.
 4. `StreamCapture` opens the ingest stream for packet batches.
 
 The agent verifies that assignment session, node, and stream identity match its

@@ -239,6 +239,29 @@ func TestManagerDeleteSessionAgents(t *testing.T) {
 	}
 }
 
+func TestManagerDeleteAgentOnNode(t *testing.T) {
+	client := newTestClient()
+	mgr := NewManager(client, testAgentConfig())
+	for _, node := range []string{"node-a", "node-b"} {
+		if _, err := mgr.CreateForNode(context.Background(), "sess-1", node, testCreateOptions); err != nil {
+			t.Fatalf("CreateForNode(%s): %v", node, err)
+		}
+	}
+	if err := mgr.DeleteAgentOnNode(context.Background(), "sess-1", "node-b"); err != nil {
+		t.Fatalf("DeleteAgentOnNode: %v", err)
+	}
+	remaining, err := mgr.ListSessionAgents(context.Background(), "sess-1")
+	if err != nil {
+		t.Fatalf("ListSessionAgents: %v", err)
+	}
+	if len(remaining) != 1 {
+		t.Fatalf("%d agents remain, want 1", len(remaining))
+	}
+	if remaining[0].Spec.NodeName != "node-a" {
+		t.Fatalf("remaining node = %q, want node-a", remaining[0].Spec.NodeName)
+	}
+}
+
 func TestSessionLabelSelectorRejectsInvalidSessionID(t *testing.T) {
 	if _, err := SessionLabelSelector("bad,id"); err == nil {
 		t.Fatal("expected error for invalid label value")

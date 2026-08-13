@@ -40,8 +40,9 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
-// WatchTargets blocks until the first assignment arrives or ctx is cancelled.
-func (c *Client) WatchTargets(ctx context.Context, sessionID, node, agentPod, streamID string) (*snifferv1.AgentAssignment, error) {
+// WatchTargets opens the assignment stream. The caller Recv()s updates until the
+// stream ends (session stop or this agent being removed).
+func (c *Client) WatchTargets(ctx context.Context, sessionID, node, agentPod, streamID string) (snifferv1.AgentIngestService_WatchTargetsClient, error) {
 	ctx = withAgentIdentity(ctx, agentPod, streamID)
 	stream, err := c.ingest.WatchTargets(ctx, &snifferv1.WatchTargetsRequest{
 		SessionId: sessionID,
@@ -51,11 +52,7 @@ func (c *Client) WatchTargets(ctx context.Context, sessionID, node, agentPod, st
 	if err != nil {
 		return nil, fmt.Errorf("watch targets: %w", err)
 	}
-	assignment, err := stream.Recv()
-	if err != nil {
-		return nil, fmt.Errorf("receive assignment: %w", err)
-	}
-	return assignment, nil
+	return stream, nil
 }
 
 func (c *Client) ReportStatus(ctx context.Context, req *snifferv1.ReportStatusRequest, agentPod string) error {

@@ -93,7 +93,7 @@ Goal: `k8s-sniffer capture -n NS --pod REGEX -o out.pcap` works for multiple pod
 | T2.8 | `--duration` hard stop + graceful drain | S | T1.14 | Session ends cleanly after duration |
 | T-TEST.4 | 2-node kind config + e2e helpers | S | T-TEST.1 | **E2E2.3** can schedule pods on distinct nodes |
 
-**Phase 2 testing exit:** **E2E2.1** + **E2E2.3** + E2E2.5 required in CI (see TESTING.md).
+**Phase 2 testing exit:** **E2E2.1** + **E2E2.3** + E2E2.6 required in CI (see TESTING.md). E2E2.5 is deferred with T2.8.
 
 ---
 
@@ -206,3 +206,15 @@ Parallelizable after T1.1:
 - [x] T-TEST.2 CI workflows — [specs/S2-ci-e2e.md](../specs/S2-ci-e2e.md)
 - [x] T-TEST.3 envtest Hub lifecycle — [specs/S2-envtest-hub.md](../specs/S2-envtest-hub.md)
 - [x] T-TEST.7 E2e artifacts — [specs/S2-ci-e2e.md](../specs/S2-ci-e2e.md)
+
+### Phase 2 checklist
+
+- [x] T2.1 Live pod watch — [specs/S2-phase2.md](../specs/S2-phase2.md)
+- [x] T2.2 Agent target hot-update — [specs/S2-phase2.md](../specs/S2-phase2.md)
+- [x] T2.3 Spawn/remove agents as nodes appear/leave — [specs/S2-phase2.md](../specs/S2-phase2.md)
+- [ ] T2.4 `--bpf` / capture filter — **deferred** (flag already plumbed; e2e not required)
+- [x] T2.5 PCAPng IDB metadata — [specs/S2-phase2.md](../specs/S2-phase2.md)
+- [ ] T2.6 `--split-per-pod` — **deferred**
+- [x] T2.7 Session stats events — [specs/S2-phase2.md](../specs/S2-phase2.md)
+- [ ] T2.8 `--duration` hard stop — **deferred** (CLI already stops after duration; no extra e2e)
+- [x] T-TEST.4 2-node kind + e2e helpers — [specs/S2-phase2.md](../specs/S2-phase2.md)

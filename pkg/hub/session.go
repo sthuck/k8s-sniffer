@@ -24,19 +24,37 @@ type agentRecord struct {
 	ingestActive bool
 }
 
+type podStat struct {
+	pod     *snifferv1.PodRef
+	packets uint64
+	bytes   uint64
+	dropped uint64
+}
+
+type sessionCounters struct {
+	packets uint64
+	bytes   uint64
+	dropped uint64
+	perPod  map[string]*podStat
+}
+
 // sessionState is the in-memory hub state for one capture session.
 type sessionState struct {
-	mu          sync.RWMutex
-	lifecycleMu sync.Mutex
-	proto       *snifferv1.Session
-	events      *eventLog
-	packets     *packetLog
-	ctx         context.Context
-	cancel      context.CancelFunc
-	stopOnce    sync.Once
-	agents      map[string]agentRecord
-	assigns     map[string]*snifferv1.AgentAssignment
-	stateChange chan struct{}
+	mu           sync.RWMutex
+	lifecycleMu  sync.Mutex
+	reconcileMu  sync.Mutex
+	proto        *snifferv1.Session
+	events       *eventLog
+	packets      *packetLog
+	ctx          context.Context
+	cancel       context.CancelFunc
+	stopOnce     sync.Once
+	agents       map[string]agentRecord
+	assigns      map[string]*snifferv1.AgentAssignment
+	stateChange  chan struct{}
+	assignGen    uint64
+	assignChange chan struct{}
+	stats        sessionCounters
 }
 
 func newSessionState(id string, spec *snifferv1.CaptureSpec) *sessionState {
@@ -48,13 +66,15 @@ func newSessionState(id string, spec *snifferv1.CaptureSpec) *sessionState {
 			State:     snifferv1.SessionState_SESSION_STATE_PENDING,
 			CreatedAt: timestamppb.Now(),
 		},
-		events:      newEventLog(),
-		packets:     newPacketLog(),
-		ctx:         ctx,
-		cancel:      cancel,
-		agents:      make(map[string]agentRecord),
-		assigns:     make(map[string]*snifferv1.AgentAssignment),
-		stateChange: make(chan struct{}),
+		events:       newEventLog(),
+		packets:      newPacketLog(),
+		ctx:          ctx,
+		cancel:       cancel,
+		agents:       make(map[string]agentRecord),
+		assigns:      make(map[string]*snifferv1.AgentAssignment),
+		stateChange:  make(chan struct{}),
+		assignChange: make(chan struct{}),
+		stats:        sessionCounters{perPod: make(map[string]*podStat)},
 	}
 }
 
@@ -139,6 +159,166 @@ func (s *sessionState) recordAgent(node, podName, streamID string, assignment *s
 	defer s.mu.Unlock()
 	s.agents[node] = agentRecord{node: node, podName: podName, streamID: streamID}
 	s.assigns[node] = assignment
+	s.notifyAssignLocked()
+}
+
+func (s *sessionState) updateAssignment(node string, assignment *snifferv1.AgentAssignment) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.assigns[node] = assignment
+	s.notifyAssignLocked()
+}
+
+func (s *sessionState) removeAgent(node string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.agents, node)
+	delete(s.assigns, node)
+	nodes := make([]string, 0, len(s.agents))
+	for n := range s.agents {
+		nodes = append(nodes, n)
+	}
+	s.proto.Nodes = nodes
+	s.notifyAssignLocked()
+}
+
+func (s *sessionState) notifyAssignLocked() {
+	s.assignGen++
+	close(s.assignChange)
+	s.assignChange = make(chan struct{})
+}
+
+func (s *sessionState) assignmentGeneration() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.assignGen
+}
+
+func (s *sessionState) assignmentForNode(node string) (*snifferv1.AgentAssignment, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	a, ok := s.assigns[node]
+	if !ok {
+		return nil, false
+	}
+	return proto.Clone(a).(*snifferv1.AgentAssignment), true
+}
+
+func (s *sessionState) currentTargets() map[string]*snifferv1.PodRef {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]*snifferv1.PodRef)
+	for _, a := range s.assigns {
+		for _, t := range a.GetTargets() {
+			if p := t.GetPod(); p != nil && p.GetUid() != "" {
+				out[p.GetUid()] = p
+			}
+		}
+	}
+	return out
+}
+
+func (s *sessionState) agentNodes() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	nodes := make([]string, 0, len(s.agents))
+	for n := range s.agents {
+		nodes = append(nodes, n)
+	}
+	return nodes
+}
+
+func (s *sessionState) waitAssignChange(ctx context.Context, node string, gen uint64) error {
+	for {
+		s.mu.RLock()
+		if isTerminalState(s.proto.State) || s.proto.State == snifferv1.SessionState_SESSION_STATE_STOPPING {
+			s.mu.RUnlock()
+			return fmt.Errorf("session stopping")
+		}
+		if _, ok := s.agents[node]; !ok {
+			s.mu.RUnlock()
+			return fmt.Errorf("agent removed")
+		}
+		if s.assignGen != gen {
+			s.mu.RUnlock()
+			return nil
+		}
+		changed := s.assignChange
+		s.mu.RUnlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.done():
+			return fmt.Errorf("session stopped")
+		case <-changed:
+		}
+	}
+}
+
+func (s *sessionState) addPacketLocked(pod *snifferv1.PodRef, nBytes int) {
+	if nBytes < 0 {
+		nBytes = 0
+	}
+	s.stats.packets++
+	s.stats.bytes += uint64(nBytes)
+	if pod == nil || pod.GetUid() == "" {
+		return
+	}
+	st := s.podStatLocked(pod)
+	st.packets++
+	st.bytes += uint64(nBytes)
+}
+
+func (s *sessionState) addDropped(n uint64, pod *snifferv1.PodRef) {
+	if n == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stats.dropped += n
+	if pod == nil || pod.GetUid() == "" {
+		return
+	}
+	st := s.podStatLocked(pod)
+	st.dropped += n
+}
+
+func (s *sessionState) podStatLocked(pod *snifferv1.PodRef) *podStat {
+	st, ok := s.stats.perPod[pod.GetUid()]
+	if !ok {
+		st = &podStat{pod: proto.Clone(pod).(*snifferv1.PodRef)}
+		s.stats.perPod[pod.GetUid()] = st
+	}
+	return st
+}
+
+func (s *sessionState) snapshotStats() *snifferv1.SessionStats {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := &snifferv1.SessionStats{
+		Packets: s.stats.packets,
+		Bytes:   s.stats.bytes,
+		Dropped: s.stats.dropped,
+	}
+	for _, st := range s.stats.perPod {
+		out.PerPod = append(out.PerPod, &snifferv1.PodCounters{
+			Pod:     proto.Clone(st.pod).(*snifferv1.PodRef),
+			Packets: st.packets,
+			Bytes:   st.bytes,
+			Dropped: st.dropped,
+		})
+	}
+	return out
+}
+
+func (s *sessionState) emitStats() {
+	stats := s.snapshotStats()
+	s.emit(&snifferv1.SessionEvent{
+		SessionId: s.proto.Id,
+		Severity:  snifferv1.Severity_SEVERITY_INFO,
+		Message:   fmt.Sprintf("stats packets=%d bytes=%d dropped=%d", stats.GetPackets(), stats.GetBytes(), stats.GetDropped()),
+		Payload:   &snifferv1.SessionEvent_Stats{Stats: stats},
+	})
 }
 
 func (s *sessionState) assignmentFor(node, podName, streamID string) (*snifferv1.AgentAssignment, error) {
@@ -222,6 +402,11 @@ func (s *sessionState) commitCaptureRecord(node, streamID string, record *sniffe
 	}
 	rec.lastSequence = frame.GetSequence()
 	s.agents[node] = rec
+	n := int(frame.GetOriginalLength())
+	if n == 0 {
+		n = len(frame.GetPayload())
+	}
+	s.addPacketLocked(frame.GetPod(), n)
 	return nil
 }
 

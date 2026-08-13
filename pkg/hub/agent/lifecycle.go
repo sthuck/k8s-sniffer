@@ -363,3 +363,63 @@ func (m *Manager) waitSessionAgentsGone(ctx context.Context, sessionID string) e
 		return len(pods) == 0, nil
 	})
 }
+
+// DeleteAgentOnNode removes the session agent pinned to nodeName, if any.
+func (m *Manager) DeleteAgentOnNode(ctx context.Context, sessionID, nodeName string) error {
+	selector, err := SessionNodeLabelSelector(sessionID, nodeName)
+	if err != nil {
+		return err
+	}
+	grace := int64(5)
+	propagation := metav1.DeletePropagationBackground
+	deleteOpts := metav1.DeleteOptions{
+		GracePeriodSeconds: &grace,
+		PropagationPolicy:  &propagation,
+	}
+	agentLog.Debug("deleting agent on node",
+		slog.String("session_id", sessionID),
+		slog.String("node", nodeName),
+		slog.String("selector", selector),
+	)
+	list, err := m.client.CoreV1().Pods(m.cfg.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: selector,
+	})
+	if err != nil {
+		return fmt.Errorf("list agent on node %q: %w", nodeName, err)
+	}
+	var errs []error
+	for i := range list.Items {
+		pod := list.Items[i]
+		if delErr := m.client.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, deleteOpts); delErr != nil && !apierrors.IsNotFound(delErr) {
+			errs = append(errs, fmt.Errorf("delete agent pod %s/%s: %w", pod.Namespace, pod.Name, delErr))
+		}
+	}
+	if joinErr := errors.Join(errs...); joinErr != nil {
+		return joinErr
+	}
+	if err := m.waitSelectorGone(ctx, selector); err != nil {
+		return err
+	}
+	agentLog.Info("agent on node deleted",
+		slog.String("session_id", sessionID),
+		slog.String("node", nodeName),
+	)
+	return nil
+}
+
+func (m *Manager) waitSelectorGone(ctx context.Context, selector string) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultDeleteTimeout)
+	defer cancel()
+	return wait.PollUntilContextCancel(ctx, 200*time.Millisecond, true, func(ctx context.Context) (bool, error) {
+		list, err := m.client.CoreV1().Pods(m.cfg.Namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: selector,
+		})
+		if err != nil {
+			if isRetriableAPIError(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return len(list.Items) == 0, nil
+	})
+}
