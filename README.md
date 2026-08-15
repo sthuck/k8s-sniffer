@@ -29,16 +29,25 @@ E2E3.2–E2E3.4), and `e2e-kind-tls` for E2E3.1. `--bpf` e2e, `--split-per-pod`,
 ## Development
 
 ```bash
-make build   # ./bin/k8s-sniffer, ./bin/k8s-sniffer-agent
-make verify  # proto-check + vet + test (the pre-push / CI gate)
-make proto   # regenerate api/sniffer/v1 (needs protoc on PATH; pin PROTOC_VERSION)
+make build     # ./bin/k8s-sniffer, ./bin/k8s-sniffer-agent
+make verify    # proto-check + vet + test + release-version tests
+make dist-all  # CLI archives (linux/amd64, windows/amd64, darwin/arm64) in ./dist
+make proto     # regenerate api/sniffer/v1 (needs protoc on PATH; pin PROTOC_VERSION)
 ```
 
-CI (`.github/workflows/verify.yml`) runs `make verify` on every PR and on pushes
-to `main`. Use `protoc` at `PROTOC_VERSION` from the Makefile so `proto-check`
-matches committed stubs.
+Windows `make dist` needs `zip` on PATH. CI (`.github/workflows/verify.yml`)
+runs `make verify` on every PR and on pushes to `main`. Use `protoc` at
+`PROTOC_VERSION` from the Makefile so `proto-check` matches committed stubs.
 
-Release builds pin the privileged agent image by digest:
+To cut a GitHub release, run the **release** workflow from `main` (Actions →
+release → Run workflow). It reuses the verify suite (unit, envtest, kind e2e),
+publishes the agent image to `ghcr.io/<owner>/k8s-sniffer-agent`, digest-pins
+that image into CLI archives for linux/amd64, windows/amd64, and darwin/arm64,
+tags the next minor version (or a version you type that is newer than the
+latest tag), generates notes from commits since the previous tag, and uploads
+the archives. The first tag is `v0.1.0`. Locally: `make dist-all`.
+
+Release CLI builds bake the privileged agent image digest:
 
 ```bash
 make build AGENT_IMAGE=ghcr.io/sthuck/k8s-sniffer-agent@sha256:...

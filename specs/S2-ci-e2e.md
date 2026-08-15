@@ -16,7 +16,20 @@
 | `integration` | `make integration-test` | envtest IT1.1 (T-TEST.3) |
 | `e2e-kind` | `./test/e2e/run.sh` | Installs kind v0.24.0; runs E2E1.1 |
 
-Triggers, concurrency, and `contents: read` permissions match S0.
+Triggers, concurrency (`${{ github.workflow }}-${{ github.ref }}`), and
+`contents: read` permissions match S0. `workflow_call` lets the release
+workflow run this same gate before publishing.
+
+## 1.1 Release workflow
+
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) (`workflow_dispatch` from `main`):
+
+| Job | Notes |
+|-----|-------|
+| `test` | `uses: ./.github/workflows/verify.yml` |
+| `image` | Build/push `ghcr.io/<owner>/k8s-sniffer-agent` (`:VERSION` + `:latest`) and export the digest |
+| `build` | CLI-only archives with `AGENT_IMAGE=<digest>` |
+| `release` | Tag, generated notes, upload archives + checksums |
 
 ## 2. Failure artifacts (T-TEST.7)
 

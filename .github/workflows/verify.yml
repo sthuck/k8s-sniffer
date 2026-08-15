@@ -6,9 +6,10 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
-  group: verify-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:

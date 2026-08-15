@@ -28,13 +28,26 @@ ifneq ($(AGENT_IMAGE),)
 LDFLAGS += -X $(MODULE)/pkg/capture.agentImageRef=$(AGENT_IMAGE)
 endif
 
+DIST ?= $(CURDIR)/dist
+DIST_GOOS ?= $(shell $(GO) env GOOS)
+DIST_GOARCH ?= $(shell $(GO) env GOARCH)
+DIST_LDFLAGS := -s -w $(LDFLAGS)
+ifeq ($(DIST_GOOS),windows)
+DIST_EXT := .exe
+DIST_ARCHIVE := $(DIST)/k8s-sniffer_$(VERSION)_$(DIST_GOOS)_$(DIST_GOARCH).zip
+else
+DIST_EXT :=
+DIST_ARCHIVE := $(DIST)/k8s-sniffer_$(VERSION)_$(DIST_GOOS)_$(DIST_GOARCH).tar.gz
+endif
+DIST_STAGE := $(DIST)/$(DIST_GOOS)-$(DIST_GOARCH)
+
 .PHONY: all
 all: build verify
 
 # The gate to run before pushing: proto-check catches generated code that no
 # longer matches the schema, which plain `go test` cannot see.
 .PHONY: verify
-verify: proto-check vet test
+verify: proto-check vet test test-release-version
 
 $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
@@ -44,9 +57,34 @@ build: $(LOCALBIN)
 	$(GO) build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(LOCALBIN)/k8s-sniffer ./cmd/k8s-sniffer
 	$(GO) build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(LOCALBIN)/k8s-sniffer-agent ./cmd/k8s-sniffer-agent
 
+# Cross-compile the CLI into dist/. The agent ships as a GHCR image, not a
+# host binary. Windows archives need `zip` on PATH.
+.PHONY: dist
+dist:
+	mkdir -p $(DIST_STAGE)
+ifeq ($(DIST_GOOS),windows)
+	@command -v zip >/dev/null || { echo "zip not found; install zip to build windows archives (apt/brew: zip)"; exit 1; }
+endif
+	CGO_ENABLED=0 GOOS=$(DIST_GOOS) GOARCH=$(DIST_GOARCH) $(GO) build $(GOFLAGS) -ldflags '$(DIST_LDFLAGS)' -o $(DIST_STAGE)/k8s-sniffer$(DIST_EXT) ./cmd/k8s-sniffer
+ifeq ($(DIST_GOOS),windows)
+	cd $(DIST_STAGE) && zip -q $(DIST_ARCHIVE) k8s-sniffer$(DIST_EXT)
+else
+	tar -C $(DIST_STAGE) -czf $(DIST_ARCHIVE) k8s-sniffer$(DIST_EXT)
+endif
+
+.PHONY: dist-all
+dist-all:
+	$(MAKE) dist DIST_GOOS=linux DIST_GOARCH=amd64
+	$(MAKE) dist DIST_GOOS=windows DIST_GOARCH=amd64
+	$(MAKE) dist DIST_GOOS=darwin DIST_GOARCH=arm64
+
 .PHONY: test
 test:
 	$(GO) test ./...
+
+.PHONY: test-release-version
+test-release-version:
+	./scripts/release-version_test.sh
 
 # Kubernetes version for envtest binaries (IT1.1 / T-TEST.3). Keep aligned with
 # the client-go minor in go.mod (currently 0.31.x).
@@ -134,4 +172,4 @@ docker-build: image-agent image-cli
 
 .PHONY: clean
 clean:
-	rm -rf $(LOCALBIN)
+	rm -rf $(LOCALBIN) $(DIST)
