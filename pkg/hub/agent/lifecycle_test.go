@@ -3,12 +3,15 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 
@@ -291,6 +294,54 @@ func TestManagerDeleteAgentOnNode(t *testing.T) {
 	}
 	if remaining[0].Spec.NodeName != "node-a" {
 		t.Fatalf("remaining node = %q, want node-a", remaining[0].Spec.NodeName)
+	}
+}
+
+func TestCreateForNodeHintsPodSecurityForbidden(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("create", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Resource: "pods"},
+			"k8s-sniffer-xbt8j",
+			fmt.Errorf(`violates PodSecurity "baseline:latest": host namespaces (hostPID=true)`),
+		)
+	})
+	mgr := NewManager(client, testAgentConfig())
+
+	_, err := mgr.CreateForNode(context.Background(), "sess-1", "talos-worker1", testCreateOptions)
+	if err == nil {
+		t.Fatal("expected create to fail")
+	}
+	if !strings.Contains(err.Error(), `pod-security.kubernetes.io/enforce=privileged`) {
+		t.Fatalf("error missing PSS hint: %v", err)
+	}
+	if !strings.Contains(err.Error(), "k8s-sniffer") {
+		t.Fatalf("error missing agent namespace: %v", err)
+	}
+}
+
+func TestAnnotateCreateError(t *testing.T) {
+	pss := apierrors.NewForbidden(
+		schema.GroupResource{Resource: "pods"},
+		"agent",
+		fmt.Errorf(`violates PodSecurity "baseline:latest": privileged`),
+	)
+	got := annotateCreateError(pss, "k8s-sniffer")
+	if !strings.Contains(got.Error(), "pod-security.kubernetes.io/enforce=privileged") {
+		t.Fatalf("PSS forbidden: %v", got)
+	}
+
+	other := apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "agent", fmt.Errorf("not allowed"))
+	if got := annotateCreateError(other, "k8s-sniffer"); got != other {
+		t.Fatalf("non-PSS forbidden should be unchanged, got %v", got)
+	}
+
+	plain := fmt.Errorf("timeout")
+	if got := annotateCreateError(plain, "k8s-sniffer"); got != plain {
+		t.Fatalf("non-forbidden should be unchanged, got %v", got)
+	}
+	if got := annotateCreateError(nil, "k8s-sniffer"); got != nil {
+		t.Fatalf("nil: %v", got)
 	}
 }
 
