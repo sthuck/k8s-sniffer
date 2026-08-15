@@ -66,9 +66,17 @@ func New(opts Options) (*Hub, error) {
 		return nil, errKubernetesRequired
 	}
 	agentCfg := opts.Agent.WithDefaults()
+	if socket := resolveCRISocket(opts.Kubernetes, agentCfg.CRISocketHostPath); socket != agentCfg.CRISocketHostPath {
+		hubLog.Info("cri socket selected from node runtime",
+			slog.String("socket", socket),
+			slog.String("configured", agentCfg.CRISocketHostPath),
+		)
+		agentCfg.CRISocketHostPath = socket
+	}
 	if err := agentCfg.Validate(); err != nil {
 		return nil, err
 	}
+	opts.Agent = agentCfg
 	mgr := agent.NewManager(opts.Kubernetes, agentCfg)
 	if opts.ReadyTimeout > 0 {
 		mgr.WithReadyTimeout(opts.ReadyTimeout)

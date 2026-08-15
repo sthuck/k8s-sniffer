@@ -181,6 +181,90 @@ func TestCreateSessionSchedulesAgents(t *testing.T) {
 	}
 }
 
+func TestCreateSessionUsesK3sCRISocket(t *testing.T) {
+	client := newTestKubernetes(append(testWorkloadPods(), &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+		Status: corev1.NodeStatus{
+			NodeInfo: corev1.NodeSystemInfo{ContainerRuntimeVersion: "containerd://1.7.22-k3s1"},
+		},
+	})...)
+	hubClient, cleanup := startTestHub(t, client)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := hubClient.CreateSession(ctx, &snifferv1.CreateSessionRequest{
+		Spec: &snifferv1.CaptureSpec{
+			Namespace:   "prod",
+			PodPatterns: []string{"payments-.*"},
+			TlsMode:     snifferv1.TlsMode_TLS_MODE_OFF,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agents, err := client.CoreV1().Pods("k8s-sniffer").List(ctx, metav1.ListOptions{
+		LabelSelector: mustSessionSelector(t, created.GetSession().GetId()),
+	})
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	if len(agents.Items) != 1 {
+		t.Fatalf("created %d agent pods, want 1", len(agents.Items))
+	}
+	if hint := agentCRISocketHint(agents.Items[0]); hint != capture.DefaultK3sCRISocketPath {
+		t.Fatalf("CRI hint = %q, want %q", hint, capture.DefaultK3sCRISocketPath)
+	}
+	if !agentHasHostRunVolume(agents.Items[0]) {
+		t.Fatal("expected host /run volume for CRI probe")
+	}
+}
+
+func TestCreateSessionKeepsExplicitCRISocketOnK3s(t *testing.T) {
+	const custom = "/custom/cri.sock"
+	cfg := testAgentConfig()
+	cfg.CRISocketHostPath = custom
+	client := newTestKubernetes(append(testWorkloadPods(), &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+		Status: corev1.NodeStatus{
+			NodeInfo: corev1.NodeSystemInfo{ContainerRuntimeVersion: "containerd://1.7.22-k3s1"},
+		},
+	})...)
+	hubClient, _, cleanup := startTestHubServicesWithOptions(t, client, hub.Options{
+		Kubernetes:    client,
+		Agent:         cfg,
+		ReadyTimeout:  5 * time.Second,
+		WatchInterval: 20 * time.Millisecond,
+	})
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := hubClient.CreateSession(ctx, &snifferv1.CreateSessionRequest{
+		Spec: &snifferv1.CaptureSpec{
+			Namespace:   "prod",
+			PodPatterns: []string{"payments-.*"},
+			TlsMode:     snifferv1.TlsMode_TLS_MODE_OFF,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agents, err := client.CoreV1().Pods("k8s-sniffer").List(ctx, metav1.ListOptions{
+		LabelSelector: mustSessionSelector(t, created.GetSession().GetId()),
+	})
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	if len(agents.Items) != 1 {
+		t.Fatalf("created %d agent pods, want 1", len(agents.Items))
+	}
+	if hint := agentCRISocketHint(agents.Items[0]); hint != custom {
+		t.Fatalf("CRI hint = %q, want explicit %q", hint, custom)
+	}
+	if !agentHasExtraCRISocketVolume(agents.Items[0], custom) {
+		t.Fatal("expected extra hostPath for CRI socket outside /run")
+	}
+}
+
 func TestStopSessionDeletesAgents(t *testing.T) {
 	client := newTestKubernetes(testWorkloadPods()...)
 	hubClient, cleanup := startTestHub(t, client)
@@ -490,6 +574,36 @@ func mustSessionSelector(t *testing.T, sessionID string) string {
 		t.Fatalf("SessionLabelSelector: %v", err)
 	}
 	return selector
+}
+
+func agentCRISocketHint(pod corev1.Pod) string {
+	if len(pod.Spec.Containers) == 0 {
+		return ""
+	}
+	for _, e := range pod.Spec.Containers[0].Env {
+		if e.Name == "K8S_SNIFFER_CRI_SOCKET" {
+			return e.Value
+		}
+	}
+	return ""
+}
+
+func agentHasHostRunVolume(pod corev1.Pod) bool {
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == agent.HostRunVolumeName && v.HostPath != nil && v.HostPath.Path == capture.HostRunHostPath {
+			return true
+		}
+	}
+	return false
+}
+
+func agentHasExtraCRISocketVolume(pod corev1.Pod, path string) bool {
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == agent.CRISocketVolumeName && v.HostPath != nil && v.HostPath.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCreateSessionFailsWithNoMatches(t *testing.T) {

@@ -68,7 +68,7 @@ Load into kind: `kind load docker-image k8s-sniffer-agent:e2e`.
 
 - Namespace `k8s-sniffer`
 - ServiceAccount `k8s-sniffer`
-- ClusterRole: `pods` get/list/watch; `pods` create/delete; `pods/log` get
+- ClusterRole: `pods` get/list/watch; `nodes` get/list (k3s/RKE2 CRI socket detect); `pods` create/delete; `pods/log` get
 
 CLI mode uses the operator kubeconfig; the manifest documents the minimum verbs
 and provides a ServiceAccount for Phase 4 in-cluster hub.

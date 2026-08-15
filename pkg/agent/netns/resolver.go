@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"sort"
@@ -17,7 +18,11 @@ import (
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 
 	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
+	"github.com/sthuck/k8s-sniffer/pkg/capture"
+	"github.com/sthuck/k8s-sniffer/pkg/log"
 )
+
+var netnsLog = log.WithComponent("agent")
 
 const (
 	criDialTimeout = 5 * time.Second
@@ -31,8 +36,10 @@ type Resolver interface {
 
 // CRIResolver uses the node CRI socket to find a running container PID.
 type CRIResolver struct {
-	conn    *grpc.ClientConn
-	runtime runtimeapi.RuntimeServiceClient
+	conn     *grpc.ClientConn
+	runtime  runtimeapi.RuntimeServiceClient
+	endpoint string
+	hostPath string
 }
 
 // NewCRIResolver dials endpoint (unix:///path or host:port) and verifies the
@@ -64,10 +71,25 @@ func NewCRIResolver(ctx context.Context, endpoint string) (*CRIResolver, error) 
 		_ = conn.Close()
 		return nil, fmt.Errorf("cri %q: %w", endpoint, err)
 	}
-	return &CRIResolver{
-		conn:    conn,
-		runtime: runtime,
-	}, nil
+	resolver := &CRIResolver{
+		conn:     conn,
+		runtime:  runtime,
+		endpoint: endpoint,
+	}
+	resolver.hostPath = resolver.socketPath()
+	return resolver, nil
+}
+
+// HostPath is the node CRI socket path chosen for this resolver (may differ
+// from the in-container dial path after /run is bind-mounted).
+func (r *CRIResolver) HostPath() string {
+	if r == nil {
+		return ""
+	}
+	if r.hostPath != "" {
+		return r.hostPath
+	}
+	return r.socketPath()
 }
 
 func pingCRI(ctx context.Context, runtime runtimeapi.RuntimeServiceClient) error {
@@ -175,6 +197,44 @@ func (r *CRIResolver) findSandbox(ctx context.Context, pod *snifferv1.PodRef) (s
 		return "", fmt.Errorf("list pod sandbox: %w", err)
 	}
 	candidates := resp.GetItems()
+	netnsLog.Debug("listed matching pod sandboxes",
+		slog.String("namespace", pod.GetNamespace()),
+		slog.String("pod", pod.GetName()),
+		slog.String("socket", r.HostPath()),
+		slog.Int("matched", len(candidates)),
+	)
+	if sb := pickSandbox(candidates, pod); sb != nil {
+		return sb.GetId(), nil
+	}
+	return "", noSandboxError(pod, r.HostPath(), r.readySandboxCount(ctx))
+}
+
+func (r *CRIResolver) socketPath() string {
+	_, addr, err := parseCRIEndpoint(r.endpoint)
+	if err != nil || addr == "" {
+		return r.endpoint
+	}
+	return addr
+}
+
+func (r *CRIResolver) readySandboxCount(ctx context.Context) int {
+	rpcCtx, cancel := r.withRPCTimeout(ctx)
+	defer cancel()
+	resp, err := r.runtime.ListPodSandbox(rpcCtx, &runtimeapi.ListPodSandboxRequest{
+		Filter: &runtimeapi.PodSandboxFilter{
+			State: &runtimeapi.PodSandboxStateValue{
+				State: runtimeapi.PodSandboxState_SANDBOX_READY,
+			},
+		},
+	})
+	if err != nil {
+		return -1
+	}
+	return len(resp.GetItems())
+}
+
+func pickSandbox(items []*runtimeapi.PodSandbox, pod *snifferv1.PodRef) *runtimeapi.PodSandbox {
+	candidates := append([]*runtimeapi.PodSandbox(nil), items...)
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].GetCreatedAt() > candidates[j].GetCreatedAt()
 	})
@@ -182,9 +242,23 @@ func (r *CRIResolver) findSandbox(ctx context.Context, pod *snifferv1.PodRef) (s
 		if pod.GetUid() != "" && sb.GetMetadata().GetUid() != pod.GetUid() {
 			continue
 		}
-		return sb.GetId(), nil
+		return sb
 	}
-	return "", fmt.Errorf("no running sandbox for pod %s/%s", pod.GetNamespace(), pod.GetName())
+	return nil
+}
+
+func noSandboxError(pod *snifferv1.PodRef, socket string, visible int) error {
+	msg := fmt.Sprintf("no running sandbox for pod %s/%s", pod.GetNamespace(), pod.GetName())
+	if socket != "" {
+		msg += " via " + socket
+	}
+	switch {
+	case visible == 0:
+		msg += fmt.Sprintf(" (0 ready sandboxes; k3s/RKE2 use %s — pass --cri-socket)", capture.DefaultK3sCRISocketPath)
+	case visible > 0:
+		msg += fmt.Sprintf(" (%d ready sandboxes visible, none matched)", visible)
+	}
+	return fmt.Errorf("%s", msg)
 }
 
 func (r *CRIResolver) findWorkloadContainer(ctx context.Context, sandboxID string, pod *snifferv1.PodRef) (string, error) {

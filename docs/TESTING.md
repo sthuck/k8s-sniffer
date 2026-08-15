@@ -204,7 +204,9 @@ TLS e2e is flakier (kernel, privileges, library match). Isolate with `e2e_tls` t
 | TLS eBPF (E2E3.1) | Primary | Best-effort (kernel/config may differ) |
 | Hub in-cluster (E2E4.1) | Required | Nightly |
 
-If k3s diverges only on CRI socket path, fix via config flag — do not fork capture logic.
+If k3s diverges only on CRI socket path, the hub hints
+`/run/k3s/containerd/containerd.sock` and the agent probes `/run` for a CRI
+that can see Kubernetes sandboxes — do not fork capture logic.
 
 ---
 

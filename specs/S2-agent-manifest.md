@@ -27,7 +27,8 @@ Pod with:
 | `spec.automountServiceAccountToken` | `false` (agent has no API client) |
 | container `securityContext` | `privileged: true` by default, or scoped capabilities when `Unprivileged` |
 | container `imagePullPolicy` | `IfNotPresent` (including `AllowMutableImage` / kind-loaded tags) |
-| CRI socket volume | `hostPath` at `AgentConfig.CRISocketHostPath`, type `Socket`, mounted read-only |
+| CRI probe volume | `hostPath` `/run` → `/host/run`, type `Directory`, read-only |
+| Extra CRI socket | `hostPath` at `AgentConfig.CRISocketHostPath` only when that path is not under `/run` |
 
 ## 3. Security modes
 

@@ -35,7 +35,11 @@ const (
 	GenerateNamePrefix = "k8s-sniffer-"
 	// AgentContainerName is the sole container in the agent pod.
 	AgentContainerName = "agent"
-	// CRISocketVolumeName is the hostPath volume mounting the node CRI socket.
+	// HostRunVolumeName is the hostPath volume mounting node /run so the
+	// agent can probe well-known CRI sockets.
+	HostRunVolumeName = "host-run"
+	// CRISocketVolumeName is an extra hostPath when the configured socket
+	// is not under /run.
 	CRISocketVolumeName = "cri-sock"
 )
 
@@ -116,26 +120,10 @@ func PodManifest(sessionID, streamID, nodeName string, cfg capture.AgentConfig, 
 					ImagePullPolicy: pullPolicy,
 					SecurityContext: securityContext,
 					Env:             env,
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      CRISocketVolumeName,
-							MountPath: cfg.CRISocketHostPath,
-							ReadOnly:  true,
-						},
-					},
+					VolumeMounts:    criVolumeMounts(cfg.CRISocketHostPath),
 				},
 			},
-			Volumes: []corev1.Volume{
-				{
-					Name: CRISocketVolumeName,
-					VolumeSource: corev1.VolumeSource{
-						HostPath: &corev1.HostPathVolumeSource{
-							Path: cfg.CRISocketHostPath,
-							Type: hostPathType(corev1.HostPathSocket),
-						},
-					},
-				},
-			},
+			Volumes: criVolumes(cfg.CRISocketHostPath),
 		},
 	}
 	if activeDeadline > 0 {
@@ -146,6 +134,46 @@ func PodManifest(sessionID, streamID, nodeName string, cfg capture.AgentConfig, 
 		pod.Spec.ActiveDeadlineSeconds = &secs
 	}
 	return pod, nil
+}
+
+func criVolumeMounts(hostPath string) []corev1.VolumeMount {
+	mounts := []corev1.VolumeMount{{
+		Name:      HostRunVolumeName,
+		MountPath: capture.HostRunMountPath,
+		ReadOnly:  true,
+	}}
+	if capture.NeedsExtraCRISocketMount(hostPath) {
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      CRISocketVolumeName,
+			MountPath: hostPath,
+			ReadOnly:  true,
+		})
+	}
+	return mounts
+}
+
+func criVolumes(hostPath string) []corev1.Volume {
+	vols := []corev1.Volume{{
+		Name: HostRunVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: capture.HostRunHostPath,
+				Type: hostPathType(corev1.HostPathDirectory),
+			},
+		},
+	}}
+	if capture.NeedsExtraCRISocketMount(hostPath) {
+		vols = append(vols, corev1.Volume{
+			Name: CRISocketVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: hostPath,
+					Type: hostPathType(corev1.HostPathSocket),
+				},
+			},
+		})
+	}
+	return vols
 }
 
 func agentSecurityContext(cfg capture.AgentConfig) *corev1.SecurityContext {

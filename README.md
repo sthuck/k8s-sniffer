@@ -77,6 +77,17 @@ k8s-sniffer capture \
   --hub-ingest-addr 172.18.0.1:30551
 ```
 
+CRI socket auto-detect:
+
+1. Hub hints a path from the node's `containerRuntimeVersion` (k3s/RKE2 →
+   `/run/k3s/containerd/containerd.sock`, CRI-O, cri-dockerd).
+2. The agent mounts host `/run` and probes that hint plus well-known sockets,
+   preferring the CRI that can list Kubernetes sandboxes. That skips a leftover
+   `/run/containerd/containerd.sock` on k3s.
+
+Override with `--cri-socket` when the socket is outside `/run` (for example
+MicroK8s) or detect picks the wrong one.
+
 TLS: `--tls off|ebpf|keylog|auto` (default `auto`). Plaintext JSONL is `--tls-out`.
 Keylog / SSLKEYLOGFILE: [docs/TLS.md](docs/TLS.md).
 

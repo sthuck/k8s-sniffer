@@ -65,6 +65,13 @@ Package: `pkg/agent/netns`.
 
 `MapResolver` supports unit tests without a real CRI socket.
 
+k3s/RKE2 CRI lives at `/run/k3s/containerd/containerd.sock`. The hub hints that
+path from `containerRuntimeVersion` (`-k3s` / `-rke2` / `cri-o://` /
+`docker://`) when `--cri-socket` is still the default. The agent mounts host
+`/run` at `/host/run` and probes the hint plus well-known sockets, scoring a
+CRI that can list Kubernetes sandboxes above one that only answers `Version`.
+A miss lists ready sandbox count and hints at `--cri-socket`.
+
 The CRI socket is a node-level trust boundary: a read-only socket mount does not
 restrict CRI RPC methods. The privileged agent image must therefore remain
 digest-pinned; a least-privilege CRI proxy is a later hardening option.
