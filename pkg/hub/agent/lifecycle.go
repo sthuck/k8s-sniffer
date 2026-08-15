@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -149,7 +150,7 @@ func (m *Manager) CreateForNode(ctx context.Context, sessionID, nodeName string,
 	)
 	created, err := m.client.CoreV1().Pods(m.cfg.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("create agent pod on node %q: %w", nodeName, err)
+		return nil, fmt.Errorf("create agent pod on node %q: %w", nodeName, annotateCreateError(err, m.cfg.Namespace))
 	}
 	agentLog.Info("agent pod created",
 		slog.String("session_id", sessionID),
@@ -224,6 +225,16 @@ func (m *Manager) WaitReady(ctx context.Context, sessionID string, pod *corev1.P
 		slog.String("namespace", pod.Namespace),
 	)
 	return nil
+}
+
+func annotateCreateError(err error, namespace string) error {
+	if err == nil {
+		return nil
+	}
+	if apierrors.IsForbidden(err) && strings.Contains(err.Error(), "PodSecurity") {
+		return fmt.Errorf("%w (label namespace %q with pod-security.kubernetes.io/enforce=privileged; see deploy/rbac.yaml)", err, namespace)
+	}
+	return err
 }
 
 func isRetriableAPIError(err error) bool {

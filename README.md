@@ -65,6 +65,31 @@ kubectl apply -f deploy/rbac.yaml
 ./test/e2e/run.sh test    # E2E1.1 smoke (needs kind + docker)
 ```
 
+## Cluster requirements
+
+Agent pods use `hostPID`, a CRI `hostPath` volume, and a privileged container
+(or extra capabilities with `--unprivileged`). That combination is required to
+enter target netns and talk to the node CRI; it is **not** allowed under Pod
+Security `baseline` or `restricted`.
+
+Talos (and many other clusters) enforce `baseline` by default. Label the agent
+namespace with the privileged profile before capturing — `deploy/rbac.yaml`
+already does this for `k8s-sniffer`:
+
+```bash
+kubectl apply -f deploy/rbac.yaml
+# if the namespace already exists without the labels:
+kubectl label namespace k8s-sniffer \
+  pod-security.kubernetes.io/enforce=privileged \
+  pod-security.kubernetes.io/audit=privileged \
+  pod-security.kubernetes.io/warn=privileged \
+  --overwrite
+```
+
+`--unprivileged` does not avoid this: `hostPID` and the CRI `hostPath` still
+violate `baseline`. For isolated local e2e without changing a shared cluster,
+use kind (`./test/e2e/run.sh kind`).
+
 ## CLI
 
 ```bash

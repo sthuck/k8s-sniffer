@@ -8,6 +8,11 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: k8s-sniffer
+  labels:
+    # Agents need hostPID, CRI hostPath, and privileged — not allowed under PSS baseline.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
 ---
 apiVersion: v1
 kind: ServiceAccount

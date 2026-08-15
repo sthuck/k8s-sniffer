@@ -66,7 +66,7 @@ Load into kind: `kind load docker-image k8s-sniffer-agent:e2e`.
 
 `deploy/rbac.yaml`:
 
-- Namespace `k8s-sniffer`
+- Namespace `k8s-sniffer` labeled `pod-security.kubernetes.io/{enforce,audit,warn}=privileged` (agents need hostPID, CRI hostPath, privileged)
 - ServiceAccount `k8s-sniffer`
 - ClusterRole: `pods` get/list/watch; `pods` create/delete; `pods/log` get
 
