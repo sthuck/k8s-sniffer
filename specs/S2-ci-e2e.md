@@ -27,7 +27,7 @@ workflow run this same gate before publishing.
 | Job | Notes |
 |-----|-------|
 | `test` | `uses: ./.github/workflows/verify.yml` |
-| `image` | Build/push `ghcr.io/<owner>/k8s-sniffer-agent` (`:VERSION` + `:latest`), mark the GHCR package public, export the digest |
+| `image` | Build/push `ghcr.io/<owner>/k8s-sniffer-agent` (`:VERSION` + `:latest`) and export the digest |
 | `build` | CLI-only archives with `AGENT_IMAGE=<digest>` |
 | `release` | Tag, generated notes, upload archives + checksums |
 

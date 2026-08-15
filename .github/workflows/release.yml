@@ -1,4 +1,4 @@
-# Cut a tagged GitHub release: same test gate as PRs, public GHCR agent image,
+# Cut a tagged GitHub release: same test gate as PRs, GHCR agent image,
 # digest-pinned CLI archives, notes, tag + assets.
 name: release
 
@@ -75,14 +75,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Publish public agent image
+      - name: Publish agent image
         id: publish
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepare.outputs.version }}
           OWNER: ${{ github.repository_owner }}
-          OWNER_TYPE: ${{ github.event.repository.owner.type }}
-          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
           image="ghcr.io/${OWNER}/k8s-sniffer-agent"
@@ -112,7 +110,6 @@ jobs:
             exit 1
             ;;
           esac
-          OWNER_TYPE="${OWNER_TYPE}" ./scripts/ghcr-set-public.sh k8s-sniffer-agent
           echo "agent_image=${digest_ref}" >> "$GITHUB_OUTPUT"
           echo "Published ${digest_ref}"
 
@@ -186,7 +183,7 @@ jobs:
             --target "$GITHUB_SHA"
             --title "$VERSION"
             --generate-notes
-            --notes "Agent image (public): \`${AGENT_IMAGE}\`"
+            --notes "Agent image: \`${AGENT_IMAGE}\`"
           )
           if [ -n "${PREVIOUS_TAG}" ]; then
             args+=(--notes-start-tag "$PREVIOUS_TAG")

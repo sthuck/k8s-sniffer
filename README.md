@@ -38,13 +38,11 @@ runs `make verify` on every PR and on pushes to `main`. Use `protoc` at
 
 To cut a GitHub release, run the **release** workflow from `main` (Actions →
 release → Run workflow). It reuses the verify suite (unit, envtest, kind e2e),
-publishes a public agent image to `ghcr.io/<owner>/k8s-sniffer-agent`,
-digest-pins that image into CLI archives for linux/amd64, windows/amd64, and
-darwin/arm64, tags the next minor version (or a version you type that is newer
-than the latest tag), generates notes from commits since the previous tag, and
-uploads the archives. The first tag is `v0.1.0`. New GHCR packages default to
-private; if the workflow cannot flip visibility, set the package public once
-in its GitHub settings and re-run. Locally: `make dist-all`.
+publishes the agent image to `ghcr.io/<owner>/k8s-sniffer-agent`, digest-pins
+that image into CLI archives for linux/amd64, windows/amd64, and darwin/arm64,
+tags the next minor version (or a version you type that is newer than the
+latest tag), generates notes from commits since the previous tag, and uploads
+the archives. The first tag is `v0.1.0`. Locally: `make dist-all`.
 
 Release CLI builds bake the privileged agent image digest:
 
