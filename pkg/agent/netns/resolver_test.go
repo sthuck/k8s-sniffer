@@ -5,6 +5,9 @@ import (
 	"testing"
 
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
+
+	snifferv1 "github.com/sthuck/k8s-sniffer/api/sniffer/v1"
+	"github.com/sthuck/k8s-sniffer/pkg/capture"
 )
 
 func TestParseCRIEndpoint(t *testing.T) {
@@ -138,6 +141,38 @@ func TestWorkloadContainers(t *testing.T) {
 	got = workloadContainers(onlyPOD)
 	if len(got) != 1 || got[0].GetMetadata().GetName() != "POD" {
 		t.Fatalf("fallback = %v", got)
+	}
+}
+
+func TestPickSandbox(t *testing.T) {
+	t.Parallel()
+	pod := &snifferv1.PodRef{Namespace: "tabnine", Name: "app-1", Uid: "uid-1"}
+	older := &runtimeapi.PodSandbox{Id: "old", CreatedAt: 1, Metadata: &runtimeapi.PodSandboxMetadata{Uid: "uid-1"}}
+	newer := &runtimeapi.PodSandbox{Id: "new", CreatedAt: 2, Metadata: &runtimeapi.PodSandboxMetadata{Uid: "uid-1"}}
+	other := &runtimeapi.PodSandbox{Id: "other", CreatedAt: 3, Metadata: &runtimeapi.PodSandboxMetadata{Uid: "uid-2"}}
+
+	got := pickSandbox([]*runtimeapi.PodSandbox{older, newer, other}, pod)
+	if got == nil || got.GetId() != "new" {
+		t.Fatalf("pickSandbox() = %v, want newest uid match", got)
+	}
+	if got := pickSandbox([]*runtimeapi.PodSandbox{other}, pod); got != nil {
+		t.Fatalf("pickSandbox() = %v, want nil on uid miss", got)
+	}
+}
+
+func TestNoSandboxError(t *testing.T) {
+	t.Parallel()
+	pod := &snifferv1.PodRef{Namespace: "tabnine", Name: "app-1"}
+	err := noSandboxError(pod, capture.DefaultCRISocketPath, 0)
+	if err == nil || !strings.Contains(err.Error(), "via "+capture.DefaultCRISocketPath) {
+		t.Fatalf("missing socket: %v", err)
+	}
+	if !strings.Contains(err.Error(), "--cri-socket") || !strings.Contains(err.Error(), capture.DefaultK3sCRISocketPath) {
+		t.Fatalf("missing k3s hint: %v", err)
+	}
+	err = noSandboxError(pod, capture.DefaultK3sCRISocketPath, 4)
+	if err == nil || !strings.Contains(err.Error(), "4 ready sandboxes") {
+		t.Fatalf("missing visible count: %v", err)
 	}
 }
 

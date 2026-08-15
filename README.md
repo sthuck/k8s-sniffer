@@ -77,6 +77,15 @@ k8s-sniffer capture \
   --hub-ingest-addr 172.18.0.1:30551
 ```
 
+k3s and RKE2 expose CRI at `/run/k3s/containerd/containerd.sock`, not the
+kind/Talos default `/run/containerd/containerd.sock`. The hub selects the k3s
+path from the node's `containerRuntimeVersion` when `--cri-socket` is left at
+the default. Override explicitly if auto-detect is wrong:
+
+```bash
+k8s-sniffer capture ... --cri-socket /run/k3s/containerd/containerd.sock
+```
+
 TLS: `--tls off|ebpf|keylog|auto` (default `auto`). Plaintext JSONL is `--tls-out`.
 Keylog / SSLKEYLOGFILE: [docs/TLS.md](docs/TLS.md).
 

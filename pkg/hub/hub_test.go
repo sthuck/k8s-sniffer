@@ -181,6 +181,86 @@ func TestCreateSessionSchedulesAgents(t *testing.T) {
 	}
 }
 
+func TestCreateSessionUsesK3sCRISocket(t *testing.T) {
+	client := newTestKubernetes(append(testWorkloadPods(), &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+		Status: corev1.NodeStatus{
+			NodeInfo: corev1.NodeSystemInfo{ContainerRuntimeVersion: "containerd://1.7.22-k3s1"},
+		},
+	})...)
+	hubClient, cleanup := startTestHub(t, client)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := hubClient.CreateSession(ctx, &snifferv1.CreateSessionRequest{
+		Spec: &snifferv1.CaptureSpec{
+			Namespace:   "prod",
+			PodPatterns: []string{"payments-.*"},
+			TlsMode:     snifferv1.TlsMode_TLS_MODE_OFF,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agents, err := client.CoreV1().Pods("k8s-sniffer").List(ctx, metav1.ListOptions{
+		LabelSelector: mustSessionSelector(t, created.GetSession().GetId()),
+	})
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	if len(agents.Items) != 1 {
+		t.Fatalf("created %d agent pods, want 1", len(agents.Items))
+	}
+	got := agents.Items[0].Spec.Volumes[0].HostPath.Path
+	if got != capture.DefaultK3sCRISocketPath {
+		t.Fatalf("CRI hostPath = %q, want %q", got, capture.DefaultK3sCRISocketPath)
+	}
+}
+
+func TestCreateSessionKeepsExplicitCRISocketOnK3s(t *testing.T) {
+	const custom = "/custom/cri.sock"
+	cfg := testAgentConfig()
+	cfg.CRISocketHostPath = custom
+	client := newTestKubernetes(append(testWorkloadPods(), &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+		Status: corev1.NodeStatus{
+			NodeInfo: corev1.NodeSystemInfo{ContainerRuntimeVersion: "containerd://1.7.22-k3s1"},
+		},
+	})...)
+	hubClient, _, cleanup := startTestHubServicesWithOptions(t, client, hub.Options{
+		Kubernetes:    client,
+		Agent:         cfg,
+		ReadyTimeout:  5 * time.Second,
+		WatchInterval: 20 * time.Millisecond,
+	})
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := hubClient.CreateSession(ctx, &snifferv1.CreateSessionRequest{
+		Spec: &snifferv1.CaptureSpec{
+			Namespace:   "prod",
+			PodPatterns: []string{"payments-.*"},
+			TlsMode:     snifferv1.TlsMode_TLS_MODE_OFF,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agents, err := client.CoreV1().Pods("k8s-sniffer").List(ctx, metav1.ListOptions{
+		LabelSelector: mustSessionSelector(t, created.GetSession().GetId()),
+	})
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	if len(agents.Items) != 1 {
+		t.Fatalf("created %d agent pods, want 1", len(agents.Items))
+	}
+	got := agents.Items[0].Spec.Volumes[0].HostPath.Path
+	if got != custom {
+		t.Fatalf("CRI hostPath = %q, want explicit %q", got, custom)
+	}
+}
+
 func TestStopSessionDeletesAgents(t *testing.T) {
 	client := newTestKubernetes(testWorkloadPods()...)
 	hubClient, cleanup := startTestHub(t, client)

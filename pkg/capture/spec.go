@@ -30,6 +30,8 @@ const (
 	// hostPath volume source mounted into the agent (T1.6). Use
 	// AgentConfig.CRIEndpoint for the URI a CRI client dials.
 	DefaultCRISocketPath = "/run/containerd/containerd.sock"
+	// DefaultK3sCRISocketPath is the containerd CRI socket on k3s and RKE2 nodes.
+	DefaultK3sCRISocketPath = "/run/k3s/containerd/containerd.sock"
 
 	// DefaultSnaplen matches tcpdump's modern default (whole packet).
 	DefaultSnaplen uint32 = 262144

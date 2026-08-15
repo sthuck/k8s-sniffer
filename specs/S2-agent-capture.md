@@ -65,6 +65,11 @@ Package: `pkg/agent/netns`.
 
 `MapResolver` supports unit tests without a real CRI socket.
 
+k3s/RKE2 CRI lives at `/run/k3s/containerd/containerd.sock`. The hub replaces
+the default containerd path when a node's `containerRuntimeVersion` contains
+`-k3s` or `-rke2`, unless `--cri-socket` is an explicit non-default path. A
+miss lists ready sandbox count and hints at `--cri-socket`.
+
 The CRI socket is a node-level trust boundary: a read-only socket mount does not
 restrict CRI RPC methods. The privileged agent image must therefore remain
 digest-pinned; a least-privilege CRI proxy is a later hardening option.
