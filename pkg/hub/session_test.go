@@ -116,6 +116,34 @@ func TestSequenceAdvancesOnlyAfterRecordCommit(t *testing.T) {
 	}
 }
 
+func TestValidateCaptureBatchAcceptsTLSEvents(t *testing.T) {
+	sess, _ := testCaptureSession()
+	sess.setState(snifferv1.SessionState_SESSION_STATE_RUNNING, "")
+	asg := sess.assigns["node-a"]
+	asg.Targets[0].TlsMode = snifferv1.TlsMode_TLS_MODE_AUTO
+	pod := asg.Targets[0].Pod
+	batch := &snifferv1.CaptureBatch{
+		SessionId: "session-a",
+		Node:      "node-a",
+		StreamId:  "stream-a",
+		Records: []*snifferv1.CaptureRecord{{
+			Record: &snifferv1.CaptureRecord_TlsEvent{
+				TlsEvent: &snifferv1.TlsPlaintextEvent{
+					Pod:     pod,
+					Payload: []byte("e2e-secret-token"),
+				},
+			},
+		}},
+	}
+	if err := sess.validateCaptureBatch(batch); err != nil {
+		t.Fatalf("tls event rejected: %v", err)
+	}
+	asg.Targets[0].TlsMode = snifferv1.TlsMode_TLS_MODE_OFF
+	if err := sess.validateCaptureBatch(batch); err == nil {
+		t.Fatal("expected tls event rejected when tls=off")
+	}
+}
+
 func testCaptureSession() (*sessionState, *snifferv1.CaptureBatch) {
 	pod := &snifferv1.PodRef{Namespace: "prod", Name: "api", Uid: "uid-a", Node: "node-a"}
 	assignment := &snifferv1.AgentAssignment{

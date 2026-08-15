@@ -122,11 +122,10 @@ func (Direction) EnumDescriptor() ([]byte, []int) {
 	return file_sniffer_v1_record_proto_rawDescGZIP(), []int{1}
 }
 
-// Decrypted payload captured by the TLS worker. Reserved for T3.4/T3.5: Phase 1
-// agents never emit it. It carries what a packet frame cannot model -- crypto
-// boundary direction, process and connection identity, which TLS stack was
-// hooked -- which is why plaintext is a distinct record type rather than a
-// synthetic packet.
+// Decrypted payload captured by the TLS worker (T3.4 / T3.5). It carries what
+// a packet frame cannot model -- crypto boundary direction, process and
+// connection identity, which TLS stack was hooked -- which is why plaintext
+// is a distinct record type rather than a synthetic packet.
 type TlsPlaintextEvent struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -142,7 +141,8 @@ type TlsPlaintextEvent struct {
 	Process      string `protobuf:"bytes,7,opt,name=process,proto3" json:"process,omitempty"`
 	// TLS stack the uprobe attached to, e.g. "openssl", "gotls".
 	TlsLibrary string `protobuf:"bytes,8,opt,name=tls_library,json=tlsLibrary,proto3" json:"tls_library,omitempty"`
-	// Monotonic within (stream_id, connection_id).
+	// Monotonic per TLS worker (one worker per target). connection_id groups
+	// records when known; empty means the worker did not assign a connection.
 	Sequence uint64 `protobuf:"varint,9,opt,name=sequence,proto3" json:"sequence,omitempty"`
 }
 

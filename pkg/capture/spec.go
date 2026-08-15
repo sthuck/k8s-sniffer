@@ -63,6 +63,9 @@ const (
 	TLSModeEBPF        TLSMode = 2
 	TLSModeKeylog      TLSMode = 3
 	TLSModeAuto        TLSMode = 4
+
+	// DefaultTLSMode is applied when the client leaves the mode unspecified.
+	DefaultTLSMode = TLSModeAuto
 )
 
 var tlsModeNames = map[TLSMode]string{
@@ -87,15 +90,17 @@ func (m TLSMode) Known() bool {
 	return ok && m != TLSModeUnspecified
 }
 
-// Implemented reports whether the mode can actually be honoured. Until T3.1
-// only "off" can; other modes are rejected instead of degrading a session to an
-// encrypted-only capture the user did not ask for.
-func (m TLSMode) Implemented() bool { return m == TLSModeOff }
+// Implemented reports whether the mode can actually be honoured.
+func (m TLSMode) Implemented() bool { return m.Known() }
 
-// ParseTLSMode maps a CLI-style name to a mode. T3.1 wires this to a flag.
+// WantsEBPF reports whether the agent should try an eBPF TLS worker.
+func (m TLSMode) WantsEBPF() bool { return m == TLSModeEBPF || m == TLSModeAuto }
+
+// ParseTLSMode maps a CLI-style name to a mode. Matching is case-insensitive.
 func ParseTLSMode(name string) (TLSMode, error) {
+	want := strings.ToLower(strings.TrimSpace(name))
 	for mode, modeName := range tlsModeNames {
-		if mode != TLSModeUnspecified && modeName == name {
+		if mode != TLSModeUnspecified && modeName == want {
 			return mode, nil
 		}
 	}
@@ -129,7 +134,7 @@ func (s Spec) WithDefaults() Spec {
 		out.Snaplen = DefaultSnaplen
 	}
 	if out.TLSMode == TLSModeUnspecified {
-		out.TLSMode = TLSModeOff
+		out.TLSMode = DefaultTLSMode
 	}
 	return out
 }
@@ -176,7 +181,7 @@ func (s Spec) Validate() error {
 	case !s.TLSMode.Known():
 		errs = append(errs, fmt.Errorf("tls mode: unknown value %d", int32(s.TLSMode)))
 	case !s.TLSMode.Implemented():
-		errs = append(errs, fmt.Errorf("tls mode: %s is not implemented yet (T3.1); only off is supported", s.TLSMode))
+		errs = append(errs, fmt.Errorf("tls mode: %s is not implemented", s.TLSMode))
 	}
 
 	return errors.Join(errs...)
@@ -202,6 +207,14 @@ func (s Spec) CompilePatterns() ([]*regexp.Regexp, error) {
 type SinkSpec struct {
 	// Out is a file path or StdoutSink.
 	Out string
+	// TLSOut is a JSONL file for TlsPlaintextEvent records. Empty skips the
+	// plaintext sink. Never "-" — mixing JSONL onto a PCAP stdout pipe would
+	// corrupt both.
+	TLSOut string
+	// KeylogFile is a client-side NSS key log (SSLKEYLOGFILE format) used with
+	// the wire PCAP in Wireshark/tshark. It never crosses the hub API and is
+	// not injected into target pods.
+	KeylogFile string
 }
 
 // WithDefaults returns a copy with unset fields filled in.
@@ -214,10 +227,17 @@ func (s SinkSpec) WithDefaults() SinkSpec {
 }
 
 func (s SinkSpec) Validate() error {
+	var errs []error
 	if s.Out == "" {
-		return errors.New("out: required (path or \"-\")")
+		errs = append(errs, errors.New("out: required (path or \"-\")"))
 	}
-	return nil
+	if s.TLSOut == StdoutSink {
+		errs = append(errs, errors.New("tls-out: cannot be \"-\" (would mix JSONL into the PCAP stdout pipe)"))
+	}
+	if s.TLSOut != "" && s.TLSOut == s.Out {
+		errs = append(errs, errors.New("tls-out: must be a different path than out"))
+	}
+	return errors.Join(errs...)
 }
 
 // IsStdout reports whether the sink streams to stdout.

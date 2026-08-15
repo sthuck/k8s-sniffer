@@ -13,6 +13,7 @@ import (
 	"github.com/sthuck/k8s-sniffer/pkg/agent/capture"
 	"github.com/sthuck/k8s-sniffer/pkg/agent/hubclient"
 	"github.com/sthuck/k8s-sniffer/pkg/agent/netns"
+	"github.com/sthuck/k8s-sniffer/pkg/agent/tlsworker"
 	"github.com/sthuck/k8s-sniffer/pkg/log"
 )
 
@@ -27,6 +28,7 @@ type RunnerOptions struct {
 	Config   Config
 	Resolver netns.Resolver
 	Tcpdump  Capturer
+	TLS      tlsworker.Attacher
 	Dial     func(context.Context, string) (HubClient, error)
 }
 
@@ -161,7 +163,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		capturesMu.Unlock()
 		go func() {
 			defer close(rt.done)
-			err := r.captureTarget(tctx, asg, target, batchCh)
+			err := r.captureTarget(tctx, client, asg, target, batchCh)
 			if err == nil || errors.Is(err, context.Canceled) {
 				return
 			}
@@ -317,6 +319,7 @@ func (r *Runner) sendBatches(
 
 func (r *Runner) captureTarget(
 	ctx context.Context,
+	client HubClient,
 	assignment *snifferv1.AgentAssignment,
 	target *snifferv1.Target,
 	batchCh chan<- *snifferv1.CaptureBatch,
@@ -336,6 +339,16 @@ func (r *Runner) captureTarget(
 		slog.String("pod", pod.GetName()),
 		slog.String("netns", netnsPath),
 	)
+
+	var tlsWG sync.WaitGroup
+	if r.opts.TLS != nil && tlsworker.WantsAttach(target.GetTlsMode()) {
+		tlsWG.Add(1)
+		go func() {
+			defer tlsWG.Done()
+			r.runTLS(ctx, client, assignment, target, tlsworker.PIDFromNetnsPath(netnsPath), batchCh)
+		}()
+	}
+	defer tlsWG.Wait()
 
 	snaplen := target.GetSnaplen()
 	if snaplen == 0 {
@@ -428,6 +441,109 @@ func (r *Runner) captureTarget(
 		}
 	}
 	return flush()
+}
+
+func (r *Runner) runTLS(
+	ctx context.Context,
+	client HubClient,
+	assignment *snifferv1.AgentAssignment,
+	target *snifferv1.Target,
+	pid int,
+	batchCh chan<- *snifferv1.CaptureBatch,
+) {
+	pod := target.GetPod()
+	events, statuses, err := r.opts.TLS.Attach(ctx, tlsworker.Target{
+		Pod:       pod,
+		PID:       pid,
+		Mode:      target.GetTlsMode(),
+		SessionID: assignment.GetSessionId(),
+	})
+	if err != nil {
+		agentLog.Info("tls attach failed",
+			slog.String("session_id", assignment.GetSessionId()),
+			slog.String("pod", pod.GetName()),
+			slog.String("err", err.Error()),
+		)
+		r.reportTLSStatus(ctx, client, assignment, target, tlsworker.Status{
+			Status: snifferv1.TlsStatus_TLS_STATUS_UNSUPPORTED,
+			Detail: err.Error(),
+		})
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case st, ok := <-statuses:
+			if !ok {
+				statuses = nil
+				if events == nil {
+					return
+				}
+				continue
+			}
+			agentLog.Info("tls status",
+				slog.String("session_id", assignment.GetSessionId()),
+				slog.String("pod", pod.GetName()),
+				slog.String("status", st.Status.String()),
+				slog.String("detail", st.Detail),
+			)
+			r.reportTLSStatus(ctx, client, assignment, target, st)
+		case ev, ok := <-events:
+			if !ok {
+				events = nil
+				if statuses == nil {
+					return
+				}
+				continue
+			}
+			batch := &snifferv1.CaptureBatch{
+				SessionId: assignment.GetSessionId(),
+				Node:      assignment.GetNode(),
+				StreamId:  assignment.GetStreamId(),
+				Records: []*snifferv1.CaptureRecord{{
+					Record: &snifferv1.CaptureRecord_TlsEvent{TlsEvent: ev},
+				}},
+			}
+			if err := sendBatch(ctx, batchCh, batch); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (r *Runner) reportTLSStatus(
+	ctx context.Context,
+	client HubClient,
+	assignment *snifferv1.AgentAssignment,
+	target *snifferv1.Target,
+	st tlsworker.Status,
+) {
+	if client == nil || st.Status == snifferv1.TlsStatus_TLS_STATUS_UNSPECIFIED {
+		return
+	}
+	reportCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	err := client.ReportStatus(reportCtx, &snifferv1.ReportStatusRequest{
+		SessionId: assignment.GetSessionId(),
+		Node:      assignment.GetNode(),
+		StreamId:  assignment.GetStreamId(),
+		Payload: &snifferv1.ReportStatusRequest_TlsState{
+			TlsState: &snifferv1.TlsStateChanged{
+				Pod:    target.GetPod(),
+				Status: st.Status,
+				Detail: st.Detail,
+			},
+		},
+	}, r.opts.Config.AgentPod)
+	if err != nil && ctx.Err() == nil {
+		agentLog.Info("tls status report failed",
+			slog.String("session_id", assignment.GetSessionId()),
+			slog.String("pod", target.GetPod().GetName()),
+			slog.String("err", err.Error()),
+		)
+	}
 }
 
 func validateAssignment(cfg Config, assignment *snifferv1.AgentAssignment) error {

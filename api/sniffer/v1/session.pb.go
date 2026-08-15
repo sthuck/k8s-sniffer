@@ -22,9 +22,9 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// TLS handling requested for a session. Only TLS_MODE_OFF is implemented before
-// Phase 3; other modes are rejected outright rather than silently downgraded to
-// an encrypted-only capture.
+// TLS handling requested for a session. Unspecified is defaulted to AUTO by
+// the hub/CLI (T3.1). Attach failures are non-fatal: wire capture continues
+// and WatchEvents reports per-pod TlsStateChanged.
 type TlsMode int32
 
 const (
@@ -174,7 +174,7 @@ type CaptureSpec struct {
 	BpfFilter string `protobuf:"bytes,3,opt,name=bpf_filter,json=bpfFilter,proto3" json:"bpf_filter,omitempty"`
 	// Hard stop for the session; zero means "until the client stops it".
 	Duration *durationpb.Duration `protobuf:"bytes,4,opt,name=duration,proto3" json:"duration,omitempty"`
-	// Unset means the hub default (TLS_MODE_OFF until T3.1 lands).
+	// Unset means TLS_MODE_AUTO (T3.1).
 	TlsMode TlsMode `protobuf:"varint,5,opt,name=tls_mode,json=tlsMode,proto3,enum=sniffer.v1.TlsMode" json:"tls_mode,omitempty"`
 	// Per-packet capture length; zero means the agent default.
 	Snaplen uint32 `protobuf:"varint,6,opt,name=snaplen,proto3" json:"snaplen,omitempty"`

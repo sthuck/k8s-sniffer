@@ -117,6 +117,22 @@ func RunCapture(ctx context.Context, opts CaptureOptions) error {
 	}
 	defer pcapWriter.Close()
 
+	var tlsWriter *sink.JSONLWriter
+	if sinkSpec.TLSOut != "" {
+		tlsWriter, err = sink.OpenJSONL(sinkSpec.TLSOut)
+		if err != nil {
+			return fmt.Errorf("tls jsonl sink: %w", err)
+		}
+		defer tlsWriter.Close()
+	}
+	if spec.TLSMode == capture.TLSModeKeylog {
+		hint := "tls=keylog: capturing wire PCAP only; decrypt with SSLKEYLOGFILE in Wireshark/tshark"
+		if sinkSpec.KeylogFile != "" {
+			hint += fmt.Sprintf(" (--keylog-file %s)", sinkSpec.KeylogFile)
+		}
+		cliLog.Info(hint, slog.String("keylog_file", sinkSpec.KeylogFile))
+	}
+
 	// Bootstrap (discovery + agent Ready) is not bounded by --duration; the CLI
 	// owns the hard stop after the session is running.
 	hubSpec := spec.ToProto()
@@ -154,7 +170,7 @@ func RunCapture(ctx context.Context, opts CaptureOptions) error {
 	packetWG.Add(1)
 	go func() {
 		defer packetWG.Done()
-		packetErrCh <- subscribePackets(subscribeCtx, hubClient, sessionID, pcapWriter)
+		packetErrCh <- subscribePackets(subscribeCtx, hubClient, sessionID, pcapWriter, tlsWriter)
 	}()
 	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
 	err = h.WaitForPacketSubscriber(waitCtx, sessionID)
@@ -218,6 +234,13 @@ func RunCapture(ctx context.Context, opts CaptureOptions) error {
 		slog.String("session_id", sessionID),
 		slog.Uint64("packets", pcapWriter.PacketCount()),
 	)
+	if tlsWriter != nil {
+		cliLog.Info("tls plaintext written",
+			slog.String("session_id", sessionID),
+			slog.Uint64("events", tlsWriter.EventCount()),
+			slog.String("path", sinkSpec.TLSOut),
+		)
+	}
 	return nil
 }
 
@@ -225,11 +248,16 @@ func subscribePackets(
 	ctx context.Context,
 	client snifferv1.HubServiceClient,
 	sessionID string,
-	writer *sink.PCAPWriter,
+	pcapWriter *sink.PCAPWriter,
+	tlsWriter *sink.JSONLWriter,
 ) error {
+	var kinds []snifferv1.RecordKind
+	if tlsWriter == nil {
+		kinds = []snifferv1.RecordKind{snifferv1.RecordKind_RECORD_KIND_WIRE_FRAME}
+	}
 	stream, err := client.SubscribePackets(ctx, &snifferv1.SubscribePacketsRequest{
 		SessionId: sessionID,
-		Kinds:     []snifferv1.RecordKind{snifferv1.RecordKind_RECORD_KIND_WIRE_FRAME},
+		Kinds:     kinds,
 	})
 	if err != nil {
 		return fmt.Errorf("subscribe packets: %w", err)
@@ -242,8 +270,13 @@ func subscribePackets(
 			}
 			return err
 		}
-		if err := writer.WriteRecord(rec); err != nil {
+		if err := pcapWriter.WriteRecord(rec); err != nil {
 			return err
+		}
+		if tlsWriter != nil {
+			if err := tlsWriter.WriteRecord(rec); err != nil {
+				return err
+			}
 		}
 	}
 }

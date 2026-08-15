@@ -382,6 +382,84 @@ func TestStreamCaptureDeliversAssignedPacket(t *testing.T) {
 	}
 }
 
+func TestReportStatusTLSUnsupportedKeepsSession(t *testing.T) {
+	client := newTestKubernetes(testWorkloadPods()...)
+	hubClient, ingestClient, cleanup := startTestHubServices(t, client)
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	created, err := hubClient.CreateSession(ctx, &snifferv1.CreateSessionRequest{
+		Spec: &snifferv1.CaptureSpec{
+			Namespace:   "prod",
+			PodPatterns: []string{"payments-.*"},
+			TlsMode:     snifferv1.TlsMode_TLS_MODE_AUTO,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	session := created.GetSession()
+	if session.GetState() != snifferv1.SessionState_SESSION_STATE_RUNNING {
+		t.Fatalf("state = %s, want RUNNING", session.GetState())
+	}
+	node := session.GetNodes()[0]
+	agentPod, streamID := sessionAgentIdentity(t, client, session.GetId(), node)
+
+	events, err := hubClient.WatchEvents(ctx, &snifferv1.WatchEventsRequest{
+		SessionId:     session.GetId(),
+		ReplayHistory: true,
+	})
+	if err != nil {
+		t.Fatalf("WatchEvents: %v", err)
+	}
+
+	ingestCtx := metadata.AppendToOutgoingContext(
+		ctx,
+		capture.AgentStreamMetadataKey, streamID,
+		capture.AgentPodMetadataKey, agentPod,
+	)
+	_, err = ingestClient.ReportStatus(ingestCtx, &snifferv1.ReportStatusRequest{
+		SessionId: session.GetId(),
+		Node:      node,
+		StreamId:  streamID,
+		Payload: &snifferv1.ReportStatusRequest_TlsState{
+			TlsState: &snifferv1.TlsStateChanged{
+				Pod:    &snifferv1.PodRef{Namespace: "prod", Name: "payments-api", Uid: "uid-1", Node: node},
+				Status: snifferv1.TlsStatus_TLS_STATUS_UNSUPPORTED,
+				Detail: "no libssl",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReportStatus: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	sawTLS := false
+	for time.Now().Before(deadline) && !sawTLS {
+		ev, err := events.Recv()
+		if err != nil {
+			t.Fatalf("WatchEvents Recv: %v", err)
+		}
+		st := ev.GetTlsState()
+		if st != nil && st.GetStatus() == snifferv1.TlsStatus_TLS_STATUS_UNSUPPORTED {
+			sawTLS = true
+		}
+	}
+	if !sawTLS {
+		t.Fatal("did not receive TLS unsupported status event")
+	}
+
+	got, err := hubClient.GetSession(ctx, &snifferv1.GetSessionRequest{SessionId: session.GetId()})
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.GetSession().GetState() != snifferv1.SessionState_SESSION_STATE_RUNNING {
+		t.Fatalf("state after tls unsupported = %s, want RUNNING", got.GetSession().GetState())
+	}
+}
+
 func sessionAgentIdentity(t *testing.T, client *fake.Clientset, sessionID, node string) (string, string) {
 	t.Helper()
 	pods, err := client.CoreV1().Pods("k8s-sniffer").List(context.Background(), metav1.ListOptions{

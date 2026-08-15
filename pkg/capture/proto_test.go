@@ -63,11 +63,10 @@ func TestTLSModeIsNotSilentlyDowngraded(t *testing.T) {
 		}
 	}
 
-	// An unimplemented mode must fail validation rather than capture encrypted
-	// traffic only.
+	// Known modes must survive the round trip and validate.
 	spec := Spec{Namespace: "prod", PodPatterns: []string{"api"}, TLSMode: TLSModeEBPF}
-	if err := spec.WithDefaults().Validate(); err == nil {
-		t.Error("Validate() accepted an unimplemented tls mode")
+	if err := spec.WithDefaults().Validate(); err != nil {
+		t.Errorf("Validate() rejected implemented tls mode: %v", err)
 	}
 }
 

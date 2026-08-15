@@ -4,22 +4,25 @@ Lightweight Kubernetes traffic sniffer: match pods by namespace + regex, run nod
 
 ## Status
 
-Phase 1 MVP wire path plus Phase 2 multi-pod polish: live pod attach/detach,
-per-node agent hot-update, PCAPng pod metadata, and session stats.
+Phase 1+2 wire path plus Phase 3 TLS: `--tls auto` (default) attaches eCapture when
+the workload uses OpenSSL; `--tls-out` writes plaintext JSONL. Keylog mode does
+not mutate pods — see [docs/TLS.md](docs/TLS.md).
 
 ```bash
 k8s-sniffer capture -n NAMESPACE --pod 'REGEX' -o out.pcapng \
+  --tls auto --tls-out tls.jsonl \
   --agent-image k8s-sniffer-agent:e2e --allow-mutable-agent-image \
   --hub-ingest-addr <host-reachable-from-pods>:30551
 ```
 
-Phase 1+2 testing: unit, envtest integration (IT1.1 / IT2.1), and kind e2e
-(E2E1.1, E2E2.1, E2E2.3, E2E2.6) in CI. `--bpf` e2e, `--split-per-pod`, and
-`--duration` e2e are deferred.
+Testing: unit, envtest (IT1.1 / IT2.1 / IT3.1), kind e2e (E2E1.1, E2E2.*,
+E2E3.2–E2E3.4), and `e2e-kind-tls` for E2E3.1. `--bpf` e2e, `--split-per-pod`,
+`--duration` e2e, and T3.8 synthetic TLS PCAP are deferred.
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — design
 - **[docs/TASKS.md](docs/TASKS.md)** — phased task breakdown + progress checklist
 - **[docs/TESTING.md](docs/TESTING.md)** — unit / integration / kind+k3s e2e by phase
+- **[docs/TLS.md](docs/TLS.md)** — `--tls` modes, eCapture, keylog / SSLKEYLOGFILE
 - **[docs/LOGGING.md](docs/LOGGING.md)** — slog conventions (info vs debug)
 - **[specs/](specs/README.md)** — output specs for work that has landed
 
@@ -60,11 +63,13 @@ k8s-sniffer capture \
   --namespace prod \
   --pod 'payments-.*' --pod 'checkout-.*' \
   --out ./session.pcapng \
+  --tls auto --tls-out ./session-tls.jsonl \
   --agent-image ghcr.io/sthuck/k8s-sniffer-agent@sha256:... \
   --hub-ingest-addr 172.18.0.1:30551
 ```
 
-TLS modes (`--tls auto`) land in Phase 3; wire capture and live pod watch are in.
+TLS: `--tls off|ebpf|keylog|auto` (default `auto`). Plaintext JSONL is `--tls-out`.
+Keylog / SSLKEYLOGFILE: [docs/TLS.md](docs/TLS.md).
 
 ## High-level shape
 

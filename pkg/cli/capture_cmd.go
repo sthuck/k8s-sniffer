@@ -29,17 +29,33 @@ func NewCaptureCommand(ctx context.Context, version string, run func(context.Con
 		allowMutableImg bool
 		hubListen       string
 		hubIngest       string
+		tlsMode         string
+		tlsOut          string
+		keylogFile      string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "capture",
 		Short: "Capture pod network traffic to PCAP",
 		Long: `Match Running pods in a namespace by name regex, schedule node-local
-capture agents, and write wire traffic to a PCAP or PCAPng file.`,
+capture agents, and write wire traffic to a PCAP or PCAPng file.
+
+TLS plaintext (when --tls is auto/ebpf and the workload uses OpenSSL) is written
+to --tls-out as JSONL. auto/ebpf still attach for WatchEvents TLS status when
+--tls-out is omitted. Keylog mode captures wire packets only; --keylog-file is
+the operator's local SSLKEYLOGFILE path for Wireshark/tshark (not uploaded).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			patterns, err := ParsePodPatterns(podPatterns)
 			if err != nil {
 				return err
+			}
+			tlsModeVal := capture.TLSModeUnspecified
+			if tlsMode != "" {
+				var err error
+				tlsModeVal, err = capture.ParseTLSMode(tlsMode)
+				if err != nil {
+					return err
+				}
 			}
 			spec := capture.Spec{
 				Namespace:   namespace,
@@ -47,7 +63,7 @@ capture agents, and write wire traffic to a PCAP or PCAPng file.`,
 				BPFFilter:   bpfFilter,
 				Duration:    duration,
 				Snaplen:     snaplen,
-				TLSMode:     capture.TLSModeOff,
+				TLSMode:     tlsModeVal,
 			}
 			agentCfg := capture.DefaultAgentConfig()
 			agentCfg.Namespace = agentNamespace
@@ -57,8 +73,8 @@ capture agents, and write wire traffic to a PCAP or PCAPng file.`,
 			agentCfg.LogLevel = LogLevelFromCommand(cmd)
 
 			return run(ctx, CaptureOptions{
-				Spec: spec,
-				Sink: capture.SinkSpec{Out: outPath},
+				Spec:  spec,
+				Sink:  capture.SinkSpec{Out: outPath, TLSOut: tlsOut, KeylogFile: keylogFile},
 				Agent: agentCfg,
 				Kube: k8s.ClientConfig{
 					Kubeconfig: kubeconfig,
@@ -86,6 +102,9 @@ capture agents, and write wire traffic to a PCAP or PCAPng file.`,
 	cmd.Flags().BoolVar(&allowMutableImg, "allow-mutable-agent-image", false, "Allow tag-based agent image references (development/e2e)")
 	cmd.Flags().StringVar(&hubListen, "hub-listen", "", "Hub gRPC listen address (default: 0.0.0.0:ephemeral)")
 	cmd.Flags().StringVar(&hubIngest, "hub-ingest-addr", "", "Address agents dial for ingest (default: auto-detect host IP)")
+	cmd.Flags().StringVar(&tlsMode, "tls", "auto", "TLS mode: off, ebpf, keylog, or auto (auto/ebpf always try attach for status)")
+	cmd.Flags().StringVar(&tlsOut, "tls-out", "", "JSONL file for TLS plaintext events (empty = do not write)")
+	cmd.Flags().StringVar(&keylogFile, "keylog-file", "", "Local SSLKEYLOGFILE path for Wireshark (not uploaded; may be created during capture)")
 	_ = cmd.Flags().MarkHidden("hub-listen")
 
 	_ = cmd.MarkFlagRequired("namespace")

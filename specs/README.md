@@ -21,3 +21,4 @@ Planning documents live in [`../docs`](../docs): [ARCHITECTURE.md](../docs/ARCHI
 | [S2-cli-sink.md](./S2-cli-sink.md) | T1.13–T1.17, T-TEST.1 | PCAP sink, `capture` CLI, agent image, RBAC, kind e2e harness |
 | [S2-envtest-hub.md](./S2-envtest-hub.md) | T-TEST.3 | envtest IT1.1: CreateSession/StopSession agent pod lifecycle |
 | [S2-phase2.md](./S2-phase2.md) | T2.1–T2.3, T2.5, T2.7, T-TEST.4 | Live pod watch, agent hot-update, PCAPng IDBs, session stats, 2-node e2e |
+| [S3-tls.md](./S3-tls.md) | T3.1–T3.7, T3.9, T-TEST.5 | TLS modes, ecapture worker, JSONL sink, keylog, HTTPS e2e |

@@ -41,6 +41,7 @@ Usage: $0 [kind|test|all]
 Environment:
   KIND_CLUSTER_NAME            kind cluster name (default: k8s-sniffer-e2e)
   AGENT_IMAGE                  agent image tag to build/load (default: k8s-sniffer-agent:e2e)
+  E2E_GO_TAGS                  Go build tags (default: e2e; use e2e,e2e_tls for E2E3.1)
   K8S_SNIFFER_HUB_INGEST_HOST  host IP agents use to reach CLI hub (default: kind docker IPv4 gateway)
   K8S_SNIFFER_HUB_INGEST_PORT  host port the CLI hub listens on (default: 30551)
   K8S_SNIFFER_E2E_ARTIFACT_DIR directory for failure artifacts (default: test/e2e/artifacts)
@@ -62,6 +63,8 @@ clear_artifact_dir() {
 
 CURL_IMAGE="${CURL_IMAGE:-curlimages/curl:8.8.0}"
 ECHO_IMAGE="${ECHO_IMAGE:-hashicorp/http-echo:1.0}"
+NGINX_IMAGE="${NGINX_IMAGE:-nginx:1.27-bookworm}"
+E2E_GO_TAGS="${E2E_GO_TAGS:-e2e}"
 
 cluster_node_count() {
   kind get nodes --name "$CLUSTER_NAME" 2>/dev/null | wc -l
@@ -83,9 +86,11 @@ cluster_up() {
   # Preload traffic-generator and echo images so mid-session pods/curls do not race a pull.
   docker pull "$CURL_IMAGE"
   docker pull "$ECHO_IMAGE"
+  docker pull "$NGINX_IMAGE"
   kind load docker-image "$AGENT_IMAGE" --name "$CLUSTER_NAME"
   kind load docker-image "$CURL_IMAGE" --name "$CLUSTER_NAME"
   kind load docker-image "$ECHO_IMAGE" --name "$CLUSTER_NAME"
+  kind load docker-image "$NGINX_IMAGE" --name "$CLUSTER_NAME"
   kubectl --context "kind-${CLUSTER_NAME}" apply -f "$ROOT/deploy/rbac.yaml"
   kubectl --context "kind-${CLUSTER_NAME}" apply -f "$ROOT/test/e2e/fixtures/http-echo.yaml"
 }
@@ -136,7 +141,11 @@ run_tests() {
   export K8S_SNIFFER_E2E_HUB_INGEST_ADDR="$hub_addr"
   export K8S_SNIFFER_E2E_ARTIFACT_DIR="$ARTIFACT_DIR"
   clear_artifact_dir
-  if ! (cd "$ROOT" && go test -tags=e2e -count=1 -timeout=25m ./test/e2e/...); then
+  local extra=()
+  if [[ -n "${E2E_GO_RUN:-}" ]]; then
+    extra+=(-run "$E2E_GO_RUN")
+  fi
+  if ! (cd "$ROOT" && go test -tags="${E2E_GO_TAGS}" -count=1 -timeout=25m "${extra[@]}" ./test/e2e/...); then
     dump_failure_artifacts
     return 1
   fi

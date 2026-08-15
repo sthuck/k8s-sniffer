@@ -22,11 +22,10 @@ enum Direction {
   DIRECTION_INBOUND = 2;
 }
 
-// Decrypted payload captured by the TLS worker. Reserved for T3.4/T3.5: Phase 1
-// agents never emit it. It carries what a packet frame cannot model -- crypto
-// boundary direction, process and connection identity, which TLS stack was
-// hooked -- which is why plaintext is a distinct record type rather than a
-// synthetic packet.
+// Decrypted payload captured by the TLS worker (T3.4 / T3.5). It carries what
+// a packet frame cannot model -- crypto boundary direction, process and
+// connection identity, which TLS stack was hooked -- which is why plaintext
+// is a distinct record type rather than a synthetic packet.
 message TlsPlaintextEvent {
   PodRef pod = 1;
   google.protobuf.Timestamp timestamp = 2;
@@ -38,7 +37,8 @@ message TlsPlaintextEvent {
   string process = 7;
   // TLS stack the uprobe attached to, e.g. "openssl", "gotls".
   string tls_library = 8;
-  // Monotonic within (stream_id, connection_id).
+  // Monotonic per TLS worker (one worker per target). connection_id groups
+  // records when known; empty means the worker did not assign a connection.
   uint64 sequence = 9;
 }
 
