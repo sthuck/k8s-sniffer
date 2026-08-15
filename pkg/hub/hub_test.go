@@ -211,9 +211,11 @@ func TestCreateSessionUsesK3sCRISocket(t *testing.T) {
 	if len(agents.Items) != 1 {
 		t.Fatalf("created %d agent pods, want 1", len(agents.Items))
 	}
-	got := agents.Items[0].Spec.Volumes[0].HostPath.Path
-	if got != capture.DefaultK3sCRISocketPath {
-		t.Fatalf("CRI hostPath = %q, want %q", got, capture.DefaultK3sCRISocketPath)
+	if hint := agentCRISocketHint(agents.Items[0]); hint != capture.DefaultK3sCRISocketPath {
+		t.Fatalf("CRI hint = %q, want %q", hint, capture.DefaultK3sCRISocketPath)
+	}
+	if !agentHasHostRunVolume(agents.Items[0]) {
+		t.Fatal("expected host /run volume for CRI probe")
 	}
 }
 
@@ -255,9 +257,11 @@ func TestCreateSessionKeepsExplicitCRISocketOnK3s(t *testing.T) {
 	if len(agents.Items) != 1 {
 		t.Fatalf("created %d agent pods, want 1", len(agents.Items))
 	}
-	got := agents.Items[0].Spec.Volumes[0].HostPath.Path
-	if got != custom {
-		t.Fatalf("CRI hostPath = %q, want explicit %q", got, custom)
+	if hint := agentCRISocketHint(agents.Items[0]); hint != custom {
+		t.Fatalf("CRI hint = %q, want explicit %q", hint, custom)
+	}
+	if !agentHasExtraCRISocketVolume(agents.Items[0], custom) {
+		t.Fatal("expected extra hostPath for CRI socket outside /run")
 	}
 }
 
@@ -570,6 +574,36 @@ func mustSessionSelector(t *testing.T, sessionID string) string {
 		t.Fatalf("SessionLabelSelector: %v", err)
 	}
 	return selector
+}
+
+func agentCRISocketHint(pod corev1.Pod) string {
+	if len(pod.Spec.Containers) == 0 {
+		return ""
+	}
+	for _, e := range pod.Spec.Containers[0].Env {
+		if e.Name == "K8S_SNIFFER_CRI_SOCKET" {
+			return e.Value
+		}
+	}
+	return ""
+}
+
+func agentHasHostRunVolume(pod corev1.Pod) bool {
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == agent.HostRunVolumeName && v.HostPath != nil && v.HostPath.Path == capture.HostRunHostPath {
+			return true
+		}
+	}
+	return false
+}
+
+func agentHasExtraCRISocketVolume(pod corev1.Pod, path string) bool {
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == agent.CRISocketVolumeName && v.HostPath != nil && v.HostPath.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCreateSessionFailsWithNoMatches(t *testing.T) {

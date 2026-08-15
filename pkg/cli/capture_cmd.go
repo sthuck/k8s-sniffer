@@ -98,7 +98,7 @@ the operator's local SSLKEYLOGFILE path for Wireshark/tshark (not uploaded).`,
 	cmd.Flags().StringVar(&kubeContext, "context", "", "Kubeconfig context override")
 	cmd.Flags().StringVar(&agentNamespace, "agent-namespace", capture.DefaultAgentNamespace, "Namespace for ephemeral agent pods")
 	cmd.Flags().StringVar(&agentImage, "agent-image", capture.DefaultAgentImage(), "Agent container image (digest-pinned in release builds)")
-	cmd.Flags().StringVar(&criSocket, "cri-socket", capture.DefaultCRISocketPath, "Node CRI socket host path mounted into agents (k3s/RKE2: /run/k3s/containerd/containerd.sock; auto-detected from node runtime when left at the default)")
+	cmd.Flags().StringVar(&criSocket, "cri-socket", capture.DefaultCRISocketPath, "Preferred node CRI socket (agents also probe well-known paths under /run)")
 	cmd.Flags().BoolVar(&allowMutableImg, "allow-mutable-agent-image", false, "Allow tag-based agent image references (development/e2e)")
 	cmd.Flags().StringVar(&hubListen, "hub-listen", "", "Hub gRPC listen address (default: 0.0.0.0:ephemeral)")
 	cmd.Flags().StringVar(&hubIngest, "hub-ingest-addr", "", "Address agents dial for ingest (default: auto-detect host IP)")

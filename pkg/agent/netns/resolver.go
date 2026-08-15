@@ -39,6 +39,7 @@ type CRIResolver struct {
 	conn     *grpc.ClientConn
 	runtime  runtimeapi.RuntimeServiceClient
 	endpoint string
+	hostPath string
 }
 
 // NewCRIResolver dials endpoint (unix:///path or host:port) and verifies the
@@ -70,11 +71,25 @@ func NewCRIResolver(ctx context.Context, endpoint string) (*CRIResolver, error) 
 		_ = conn.Close()
 		return nil, fmt.Errorf("cri %q: %w", endpoint, err)
 	}
-	return &CRIResolver{
+	resolver := &CRIResolver{
 		conn:     conn,
 		runtime:  runtime,
 		endpoint: endpoint,
-	}, nil
+	}
+	resolver.hostPath = resolver.socketPath()
+	return resolver, nil
+}
+
+// HostPath is the node CRI socket path chosen for this resolver (may differ
+// from the in-container dial path after /run is bind-mounted).
+func (r *CRIResolver) HostPath() string {
+	if r == nil {
+		return ""
+	}
+	if r.hostPath != "" {
+		return r.hostPath
+	}
+	return r.socketPath()
 }
 
 func pingCRI(ctx context.Context, runtime runtimeapi.RuntimeServiceClient) error {
@@ -185,13 +200,13 @@ func (r *CRIResolver) findSandbox(ctx context.Context, pod *snifferv1.PodRef) (s
 	netnsLog.Debug("listed matching pod sandboxes",
 		slog.String("namespace", pod.GetNamespace()),
 		slog.String("pod", pod.GetName()),
-		slog.String("socket", r.socketPath()),
+		slog.String("socket", r.HostPath()),
 		slog.Int("matched", len(candidates)),
 	)
 	if sb := pickSandbox(candidates, pod); sb != nil {
 		return sb.GetId(), nil
 	}
-	return "", noSandboxError(pod, r.socketPath(), r.readySandboxCount(ctx))
+	return "", noSandboxError(pod, r.HostPath(), r.readySandboxCount(ctx))
 }
 
 func (r *CRIResolver) socketPath() string {

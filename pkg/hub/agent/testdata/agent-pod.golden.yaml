@@ -31,15 +31,15 @@ spec:
     securityContext:
       privileged: true
     volumeMounts:
-    - mountPath: /run/containerd/containerd.sock
-      name: cri-sock
+    - mountPath: /host/run
+      name: host-run
       readOnly: true
   hostPID: true
   nodeName: node-a
   restartPolicy: Never
   volumes:
   - hostPath:
-      path: /run/containerd/containerd.sock
-      type: Socket
-    name: cri-sock
+      path: /run
+      type: Directory
+    name: host-run
 status: {}

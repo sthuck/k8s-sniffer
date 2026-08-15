@@ -126,6 +126,22 @@ func TestPodManifestInjectsLogLevel(t *testing.T) {
 	}
 }
 
+func TestPodManifestExtraCRISocketOutsideRun(t *testing.T) {
+	cfg := validAgentConfig()
+	cfg.CRISocketHostPath = "/custom/cri.sock"
+
+	pod, err := PodManifest("sess-1", testStreamID, "node-a", cfg, 0)
+	if err != nil {
+		t.Fatalf("PodManifest: %v", err)
+	}
+	if len(pod.Spec.Volumes) != 2 {
+		t.Fatalf("volumes = %d, want host-run + cri-sock", len(pod.Spec.Volumes))
+	}
+	if pod.Spec.Volumes[1].HostPath == nil || pod.Spec.Volumes[1].HostPath.Path != "/custom/cri.sock" {
+		t.Fatalf("extra volume = %+v", pod.Spec.Volumes[1].HostPath)
+	}
+}
+
 func TestPodManifestValidatesConfig(t *testing.T) {
 	cfg := capture.AgentConfig{}
 	if _, err := PodManifest("sess-1", testStreamID, "node-a", cfg, 0); err == nil {

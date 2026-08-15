@@ -176,6 +176,30 @@ func TestNoSandboxError(t *testing.T) {
 	}
 }
 
+func TestCountK8sSandboxes(t *testing.T) {
+	t.Parallel()
+	items := []*runtimeapi.PodSandbox{
+		{Labels: map[string]string{"io.kubernetes.pod.name": "app"}},
+		{Metadata: &runtimeapi.PodSandboxMetadata{Name: "other", Namespace: "ns"}},
+		{Metadata: &runtimeapi.PodSandboxMetadata{Name: "noid"}},
+	}
+	if got := countK8sSandboxes(items); got != 2 {
+		t.Fatalf("countK8sSandboxes() = %d, want 2", got)
+	}
+}
+
+func TestPickCRIProbe(t *testing.T) {
+	t.Parallel()
+	results := []criProbeResult{
+		{HostPath: capture.DefaultCRISocketPath, Score: 1},
+		{HostPath: capture.DefaultK3sCRISocketPath, Score: k8sSandboxScoreBase + 3},
+	}
+	got := pickCRIProbe(results)
+	if got.HostPath != capture.DefaultK3sCRISocketPath {
+		t.Fatalf("pickCRIProbe() = %+v, want k3s path with sandboxes", got)
+	}
+}
+
 func TestTrimRuntimePrefix(t *testing.T) {
 	t.Parallel()
 	if got := trimRuntimePrefix("containerd://abc123"); got != "abc123" {

@@ -48,15 +48,15 @@ func main() {
 		os.Exit(2)
 	}
 
-	criCtx, criCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	resolver, err := netns.NewCRIResolver(criCtx, "unix://"+cfg.CRISocket)
+	criCtx, criCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	resolver, err := netns.DetectCRIResolver(criCtx, cfg.CRISocket)
 	criCancel()
 	if err != nil {
 		cliLog.Info("cri resolver init failed", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
 	defer resolver.Close()
-	cliLog.Info("cri resolver ready", slog.String("socket", cfg.CRISocket))
+	cliLog.Info("cri resolver ready", slog.String("socket", resolver.HostPath()))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
