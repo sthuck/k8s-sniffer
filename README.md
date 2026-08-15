@@ -27,23 +27,26 @@ Phase 1+2 testing: unit, envtest integration (IT1.1 / IT2.1), and kind e2e
 
 ```bash
 make build     # ./bin/k8s-sniffer, ./bin/k8s-sniffer-agent
-make verify    # proto-check + vet + test (the pre-push / CI gate)
-make dist-all  # linux/amd64, windows/amd64, darwin/arm64 archives in ./dist
+make verify    # proto-check + vet + test + release-version tests
+make dist-all  # CLI archives (linux/amd64, windows/amd64, darwin/arm64) in ./dist
 make proto     # regenerate api/sniffer/v1 (needs protoc on PATH; pin PROTOC_VERSION)
 ```
 
-CI (`.github/workflows/verify.yml`) runs `make verify` on every PR and on pushes
-to `main`. Use `protoc` at `PROTOC_VERSION` from the Makefile so `proto-check`
-matches committed stubs.
+Windows `make dist` needs `zip` on PATH. CI (`.github/workflows/verify.yml`)
+runs `make verify` on every PR and on pushes to `main`. Use `protoc` at
+`PROTOC_VERSION` from the Makefile so `proto-check` matches committed stubs.
 
 To cut a GitHub release, run the **release** workflow from `main` (Actions →
-release → Run workflow). It runs `make verify` plus integration tests, builds
-linux/amd64, windows/amd64, and darwin/arm64 archives, tags the next minor
-version (or a version you type), generates notes from commits since the previous
-tag, and uploads the archives. The first tag is `v0.1.0`. Locally:
-`make dist-all`.
+release → Run workflow). It reuses the verify suite (unit, envtest, kind e2e),
+publishes a public agent image to `ghcr.io/<owner>/k8s-sniffer-agent`,
+digest-pins that image into CLI archives for linux/amd64, windows/amd64, and
+darwin/arm64, tags the next minor version (or a version you type that is newer
+than the latest tag), generates notes from commits since the previous tag, and
+uploads the archives. The first tag is `v0.1.0`. New GHCR packages default to
+private; if the workflow cannot flip visibility, set the package public once
+in its GitHub settings and re-run. Locally: `make dist-all`.
 
-Release builds pin the privileged agent image by digest:
+Release CLI builds bake the privileged agent image digest:
 
 ```bash
 make build AGENT_IMAGE=ghcr.io/sthuck/k8s-sniffer-agent@sha256:...

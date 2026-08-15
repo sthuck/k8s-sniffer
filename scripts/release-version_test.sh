@@ -42,13 +42,25 @@ out="$(run_in_repo "$tmp/repo" --version 1.4.0)"
 [[ "$out" == $'VERSION=v1.4.0\nPREVIOUS_TAG=v0.10.0' ]] || fail "manual: got $(printf %q "$out")"
 
 if run_in_repo "$tmp/repo" --version v0.1.0 >/dev/null 2>"$tmp/err"; then
-	fail "expected existing tag to fail"
+	fail "expected older manual version to fail"
 fi
-grep -q 'already exists' "$tmp/err" || fail "existing tag error: $(cat "$tmp/err")"
+grep -q 'not greater' "$tmp/err" || fail "older version error: $(cat "$tmp/err")"
+
+if run_in_repo "$tmp/repo" --version v0.10.0 >/dev/null 2>"$tmp/err"; then
+	fail "expected equal manual version to fail"
+fi
+grep -q 'not greater' "$tmp/err" || fail "equal version error: $(cat "$tmp/err")"
+
+out="$(run_in_repo "$tmp/repo" --version v0.10.1)"
+[[ "$out" == $'VERSION=v0.10.1\nPREVIOUS_TAG=v0.10.0' ]] || fail "manual patch: got $(printf %q "$out")"
 
 if run_in_repo "$tmp/repo" --version not-a-version >/dev/null 2>"$tmp/err"; then
 	fail "expected invalid version to fail"
 fi
 grep -q 'invalid version' "$tmp/err" || fail "invalid version error: $(cat "$tmp/err")"
+
+GITHUB_OUTPUT="$tmp/ghout" run_in_repo "$tmp/repo" >/dev/null
+grep -qx 'version=v0.11.0' "$tmp/ghout" || fail "GITHUB_OUTPUT version: $(cat "$tmp/ghout")"
+grep -qx 'previous_tag=v0.10.0' "$tmp/ghout" || fail "GITHUB_OUTPUT previous: $(cat "$tmp/ghout")"
 
 echo "release-version tests passed"

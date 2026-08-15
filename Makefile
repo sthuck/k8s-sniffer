@@ -57,16 +57,19 @@ build: $(LOCALBIN)
 	$(GO) build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(LOCALBIN)/k8s-sniffer ./cmd/k8s-sniffer
 	$(GO) build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(LOCALBIN)/k8s-sniffer-agent ./cmd/k8s-sniffer-agent
 
-# Cross-compile CLI + agent into dist/. Override DIST_GOOS / DIST_GOARCH / VERSION.
+# Cross-compile the CLI into dist/. The agent ships as a GHCR image, not a
+# host binary. Windows archives need `zip` on PATH.
 .PHONY: dist
 dist:
 	mkdir -p $(DIST_STAGE)
-	CGO_ENABLED=0 GOOS=$(DIST_GOOS) GOARCH=$(DIST_GOARCH) $(GO) build $(GOFLAGS) -ldflags '$(DIST_LDFLAGS)' -o $(DIST_STAGE)/k8s-sniffer$(DIST_EXT) ./cmd/k8s-sniffer
-	CGO_ENABLED=0 GOOS=$(DIST_GOOS) GOARCH=$(DIST_GOARCH) $(GO) build $(GOFLAGS) -ldflags '$(DIST_LDFLAGS)' -o $(DIST_STAGE)/k8s-sniffer-agent$(DIST_EXT) ./cmd/k8s-sniffer-agent
 ifeq ($(DIST_GOOS),windows)
-	cd $(DIST_STAGE) && zip -q $(DIST_ARCHIVE) k8s-sniffer$(DIST_EXT) k8s-sniffer-agent$(DIST_EXT)
+	@command -v zip >/dev/null || { echo "zip not found; install zip to build windows archives (apt/brew: zip)"; exit 1; }
+endif
+	CGO_ENABLED=0 GOOS=$(DIST_GOOS) GOARCH=$(DIST_GOARCH) $(GO) build $(GOFLAGS) -ldflags '$(DIST_LDFLAGS)' -o $(DIST_STAGE)/k8s-sniffer$(DIST_EXT) ./cmd/k8s-sniffer
+ifeq ($(DIST_GOOS),windows)
+	cd $(DIST_STAGE) && zip -q $(DIST_ARCHIVE) k8s-sniffer$(DIST_EXT)
 else
-	tar -C $(DIST_STAGE) -czf $(DIST_ARCHIVE) k8s-sniffer$(DIST_EXT) k8s-sniffer-agent$(DIST_EXT)
+	tar -C $(DIST_STAGE) -czf $(DIST_ARCHIVE) k8s-sniffer$(DIST_EXT)
 endif
 
 .PHONY: dist-all

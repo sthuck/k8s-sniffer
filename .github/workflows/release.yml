@@ -1,4 +1,5 @@
-# Cut a tagged GitHub release: test, cross-compile, notes, upload archives.
+# Cut a tagged GitHub release: same test gate as PRs, public GHCR agent image,
+# digest-pinned CLI archives, notes, tag + assets.
 name: release
 
 on:
@@ -15,9 +16,23 @@ concurrency:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require main
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "Releases must be created from main (got ${GITHUB_REF})" >&2
+            exit 1
+          fi
+
   prepare:
+    needs: [guard]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -28,14 +43,6 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-
-      - name: Require main
-        run: |
-          set -euo pipefail
-          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
-            echo "Releases must be created from main (got ${GITHUB_REF})" >&2
-            exit 1
-          fi
 
       - name: Compute version
         id: version
@@ -48,40 +55,69 @@ jobs:
           if [ -n "${INPUT_VERSION}" ]; then
             args+=(--version "$INPUT_VERSION")
           fi
-          eval "$(./scripts/release-version.sh "${args[@]}")"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "previous_tag=${PREVIOUS_TAG}" >> "$GITHUB_OUTPUT"
-          echo "Releasing ${VERSION} (previous: ${PREVIOUS_TAG:-none})"
+          ./scripts/release-version.sh "${args[@]}"
 
   test:
+    needs: [guard]
+    uses: ./.github/workflows/verify.yml
+    permissions:
+      contents: read
+
+  image:
+    needs: [prepare, test]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      agent_image: ${{ steps.publish.outputs.agent_image }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Install protoc
+      - name: Publish public agent image
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          OWNER: ${{ github.repository_owner }}
+          OWNER_TYPE: ${{ github.event.repository.owner.type }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          PROTOC_VERSION="$(sed -n 's/^PROTOC_VERSION ?= //p' Makefile)"
-          curl -fsSL -o /tmp/protoc.zip \
-            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
-          sudo unzip -o /tmp/protoc.zip -d /usr/local bin/protoc
-          sudo unzip -o /tmp/protoc.zip -d /usr/local 'include/*'
-          rm /tmp/protoc.zip
-          protoc --version
-
-      - name: Verify
-        run: make verify
-
-      - name: Integration (envtest)
-        run: make integration-test
+          image="ghcr.io/${OWNER}/k8s-sniffer-agent"
+          echo "${GH_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          docker build --target agent \
+            --build-arg "VERSION=${VERSION}" \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.version=${VERSION}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            -t "${image}:${VERSION}" \
+            -t "${image}:latest" \
+            .
+          docker push "${image}:${VERSION}"
+          docker push "${image}:latest"
+          digest_ref="$(docker image inspect --format '{{index .RepoDigests 0}}' "${image}:${VERSION}")"
+          case "${digest_ref}" in
+          *@sha256:*) ;;
+          *)
+            docker pull "${image}:${VERSION}"
+            digest_ref="$(docker image inspect --format '{{index .RepoDigests 0}}' "${image}:${VERSION}")"
+            ;;
+          esac
+          case "${digest_ref}" in
+          *@sha256:*) ;;
+          *)
+            echo "failed to resolve digest for ${image}:${VERSION} (got ${digest_ref})" >&2
+            exit 1
+            ;;
+          esac
+          OWNER_TYPE="${OWNER_TYPE}" ./scripts/ghcr-set-public.sh k8s-sniffer-agent
+          echo "agent_image=${digest_ref}" >> "$GITHUB_OUTPUT"
+          echo "Published ${digest_ref}"
 
   build:
-    needs: [prepare, test]
+    needs: [prepare, test, image]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -101,9 +137,10 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build
+      - name: Build CLI
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
+          AGENT_IMAGE: ${{ needs.image.outputs.agent_image }}
         run: make dist DIST_GOOS=${{ matrix.goos }} DIST_GOARCH=${{ matrix.goarch }}
 
       - uses: actions/upload-artifact@v4
@@ -113,7 +150,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [prepare, test, build]
+    needs: [prepare, test, image, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -141,6 +178,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepare.outputs.version }}
           PREVIOUS_TAG: ${{ needs.prepare.outputs.previous_tag }}
+          AGENT_IMAGE: ${{ needs.image.outputs.agent_image }}
         run: |
           set -euo pipefail
           args=(
@@ -148,6 +186,7 @@ jobs:
             --target "$GITHUB_SHA"
             --title "$VERSION"
             --generate-notes
+            --notes "Agent image (public): \`${AGENT_IMAGE}\`"
           )
           if [ -n "${PREVIOUS_TAG}" ]; then
             args+=(--notes-start-tag "$PREVIOUS_TAG")
